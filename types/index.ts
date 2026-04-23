@@ -6,6 +6,7 @@ export interface PositionData {
   what_is_good: string;
   issue: string | null;
   fix: string;
+  reference_youtube_id?: string | null;
 }
 
 export interface PriorityFix {
@@ -40,6 +41,7 @@ export interface SwingResult {
   };
   analysis: Analysis;
   drills: Drill[];
+  frames?: Record<number, string>;
 }
 
 export type CameraAngle = "dtl" | "face-on";

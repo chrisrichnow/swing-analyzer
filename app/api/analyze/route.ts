@@ -47,7 +47,7 @@ export async function POST(req: NextRequest) {
   writeFileSync(videoPath, buffer);
 
   try {
-    const { analysis, drills } = await runAnalysis(videoPath, framesDir, cameraAngle, club, apiKey);
+    const { analysis, drills, frames } = await runAnalysis(videoPath, framesDir, cameraAngle, club, apiKey);
 
     const result = {
       meta: {
@@ -58,6 +58,7 @@ export async function POST(req: NextRequest) {
       },
       analysis,
       drills,
+      frames,
     };
 
     return NextResponse.json(result);

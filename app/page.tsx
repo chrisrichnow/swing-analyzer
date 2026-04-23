@@ -109,7 +109,7 @@ export default function Home() {
         {/* Club */}
         <div className="flex flex-col gap-3">
           <label className="text-xs font-semibold text-white/40 uppercase tracking-widest">Club</label>
-          <div className="grid grid-cols-3 gap-2 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
             {CLUBS.map((c) => (
               <button
                 key={c.value}
@@ -153,7 +153,7 @@ export default function Home() {
         </button>
 
         <p className="text-center text-xs text-white/20">
-          Analysis takes 30–60 seconds depending on video length.
+          Analysis takes 30–60 seconds. Keep this screen open.
         </p>
       </div>
     </main>

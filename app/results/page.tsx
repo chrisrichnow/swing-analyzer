@@ -48,7 +48,7 @@ export default function ResultsPage() {
 
   if (!result) return null;
 
-  const { analysis, drills, meta } = result;
+  const { analysis, drills, meta, frames } = result;
   const positions = Object.entries(analysis.positions);
   const avgGrade = positions.reduce((sum, [, d]) => sum + GRADE_ORDER[d.grade], 0) / positions.length;
   const overallGrade: Grade = avgGrade >= 3.5 ? "A" : avgGrade >= 2.5 ? "B" : avgGrade >= 1.5 ? "C" : avgGrade >= 0.5 ? "D" : "F";
@@ -110,25 +110,32 @@ export default function ResultsPage() {
         </div>
 
         {/* Tabs */}
-        <div className="flex gap-1 bg-white/5 rounded-xl p-1 mb-6">
-          {(["positions", "drills"] as const).map((t) => (
-            <button
-              key={t}
-              onClick={() => setTab(t)}
-              className={`flex-1 py-2 rounded-lg text-sm font-medium transition-all capitalize ${
-                tab === t ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"
-              }`}
-            >
-              {t === "positions" ? "P1–P10 Breakdown" : `Drills (${drills.length})`}
-            </button>
-          ))}
+        <div className="sticky top-0 z-20 -mx-5 px-5 pt-2 pb-3 bg-[#080808]/95 backdrop-blur-sm">
+          <div className="flex gap-1 bg-white/5 rounded-xl p-1">
+            {(["positions", "drills"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTab(t)}
+                className={`flex-1 py-2.5 rounded-lg text-sm font-medium transition-all capitalize ${
+                  tab === t ? "bg-white/10 text-white" : "text-white/40 hover:text-white/70"
+                }`}
+              >
+                {t === "positions" ? "P1–P10 Breakdown" : `Drills (${drills.length})`}
+              </button>
+            ))}
+          </div>
         </div>
 
         {/* Positions */}
         {tab === "positions" && (
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="flex flex-col gap-4">
             {positions.map(([pos, data]) => (
-              <PositionCard key={pos} position={pos} data={data} />
+              <PositionCard
+                key={pos}
+                position={pos}
+                data={data}
+                frameDataUrl={frames?.[data.frame]}
+              />
             ))}
           </div>
         )}

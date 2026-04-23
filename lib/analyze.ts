@@ -3,22 +3,63 @@ import { execSync } from "child_process";
 import { readFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { Analysis, Drill, CameraAngle, Club } from "@/types";
+import ffmpegPath from "ffmpeg-static";
+import ffprobeStatic from "ffprobe-static";
 
-const FRAME_COUNT = 20;
+const FFMPEG = ffmpegPath ?? "ffmpeg";
+const FFPROBE = ffprobeStatic.path ?? "ffprobe";
+
+const FRAME_COUNT = 14;
+
+function detectSwingWindow(videoPath: string, videoDuration: number): { start: number; duration: number } {
+  const scanFps = 6;
+  const frameSize = 160 * 90;
+
+  const rawFrames = execSync(
+    `"${FFMPEG}" -i "${videoPath}" -vf "fps=${scanFps},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
+    { maxBuffer: 50 * 1024 * 1024 }
+  );
+
+  const frameCount = Math.floor(rawFrames.length / frameSize);
+  if (frameCount < 3) return { start: 0, duration: videoDuration };
+
+  let maxDiff = 0;
+  let peakIdx = Math.floor(frameCount / 2);
+
+  for (let i = 1; i < frameCount; i++) {
+    let diff = 0;
+    const prevOff = (i - 1) * frameSize;
+    const currOff = i * frameSize;
+    for (let j = 0; j < frameSize; j++) {
+      diff += Math.abs(rawFrames[prevOff + j] - rawFrames[currOff + j]);
+    }
+    if (diff > maxDiff) {
+      maxDiff = diff;
+      peakIdx = i;
+    }
+  }
+
+  const peakTime = peakIdx / scanFps;
+  const windowStart = Math.max(0, peakTime - 2.0);
+  const windowEnd = Math.min(videoDuration, peakTime + 1.5);
+
+  return { start: windowStart, duration: windowEnd - windowStart };
+}
 
 function extractFrames(videoPath: string, outputDir: string): string[] {
   if (existsSync(outputDir)) rmSync(outputDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
 
   const probeResult = execSync(
-    `ffprobe -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "${videoPath}"`,
+    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "${videoPath}"`,
     { encoding: "utf8" }
   ).trim();
 
   const duration = parseFloat(probeResult);
+  const swing = detectSwingWindow(videoPath, duration);
 
   execSync(
-    `ffmpeg -i "${videoPath}" -vf "fps=${FRAME_COUNT}/${duration},scale=1280:-1" -q:v 2 "${outputDir}/frame_%03d.jpg" -y -loglevel error`
+    `"${FFMPEG}" -ss ${swing.start.toFixed(3)} -i "${videoPath}" -t ${swing.duration.toFixed(3)} -vf "fps=${FRAME_COUNT}/${swing.duration.toFixed(3)},scale=640:-2" -q:v 4 "${outputDir}/frame_%03d.jpg" -y -loglevel error`
   );
 
   const frames: string[] = [];
@@ -46,7 +87,7 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
     "face-on": `Camera: FACE-ON. Focus on: weight transfer, spine tilt, hip slide vs turn, head position, knee flex, balance, shoulder plane.`,
   };
 
-  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames.
+  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address through finish — the full swing window.
 
 CONTEXT:
 - Camera: ${angleLabel.toUpperCase()}
@@ -63,16 +104,16 @@ IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explana
   "overall_score": <0-100>,
   "summary": "<2-3 sentence executive summary>",
   "positions": {
-    "P1": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P2": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P3": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P4": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P5": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P6": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P7": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P8": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P9": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P10": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" }
+    "P1": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P2": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P3": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P4": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P5": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P6": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P7": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P8": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P9": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
+    "P10": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" }
   },
   "priority_fix": {
     "position": "<P#>",
@@ -81,6 +122,8 @@ IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explana
     "drill": "<specific drill>"
   }
 }
+
+For "reference_youtube_id": when a position has an issue, provide the YouTube video ID (the part after "?v=") of a well-known golf instruction video that clearly demonstrates the CORRECT version of that position/technique. Use videos from trusted channels you are confident exist: Rick Shiels Golf, Me And My Golf, Rotary Swing, Danny Maude, Clay Ballard (Top Speed Golf), Shawn Clement. Set to null if no issue or if you are not highly confident the video ID is correct.
 
 Be specific and honest. Reference what you actually see in the frames.`;
 }
@@ -166,7 +209,7 @@ export async function runAnalysis(
   contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club) });
 
   const analysisResponse = await client.messages.create({
-    model: "claude-opus-4-6",
+    model: "claude-sonnet-4-6",
     max_tokens: 4096,
     messages: [{ role: "user", content: contentBlocks }],
   });
@@ -182,7 +225,21 @@ export async function runAnalysis(
     // drills are non-critical
   }
 
+  const referencedFrameNums = new Set<number>(
+    Object.values(analysis.positions)
+      .map((p) => p.frame)
+      .filter((n) => typeof n === "number" && n >= 1 && n <= FRAME_COUNT)
+  );
+
+  const swingFrames: Record<number, string> = {};
+  for (const n of referencedFrameNums) {
+    const framePath = join(framesDir, `frame_${String(n).padStart(3, "0")}.jpg`);
+    if (existsSync(framePath)) {
+      swingFrames[n] = `data:image/jpeg;base64,${readFileSync(framePath).toString("base64")}`;
+    }
+  }
+
   rmSync(framesDir, { recursive: true });
 
-  return { analysis, drills };
+  return { analysis, drills, frames: swingFrames };
 }
