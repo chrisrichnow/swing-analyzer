@@ -99,7 +99,7 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
     "face-on": `Camera: FACE-ON. Focus on: weight transfer, spine tilt, hip slide vs turn, head position, knee flex, balance, shoulder plane.`,
   };
 
-  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address (static setup) through finish — the full swing window. Frame 1 should show the golfer at address before any movement begins.
+  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address through finish. Frame 1 is at or near address.
 
 CONTEXT:
 - Camera: ${angleLabel.toUpperCase()}
@@ -108,7 +108,27 @@ CONTEXT:
 
 ${angleContext[cameraAngle]}
 
-Analyze using P1-P10: P1=Address, P2=Takeaway, P3=Lead arm parallel (backswing), P4=Top, P5=Lead arm parallel (downswing), P6=Delivery, P7=Impact, P8=Shaft parallel (follow-through), P9=Lead arm parallel (follow-through), P10=Finish.
+POSITION IDENTIFICATION GUIDE — use these visual cues to identify which frame best matches each position:
+
+P1 — ADDRESS: Golfer static at setup. Right knee flexed more than left. Spine neutral, head angled down toward ball. Both arms hanging, left arm straight. No movement yet.
+
+P2 — TAKEAWAY (shaft parallel, backswing): Clubshaft and lead arm parallel to the target line at approximately hip height. Club positioned just outside the lead foot (face-on). Right knee beginning to lose flex, left knee beginning to flex. Right elbow starting to hinge.
+
+P3 — LEAD ARM PARALLEL (backswing): Lead (left) arm parallel to the ground. Clubshaft pointing at the swing plane baseline, bisecting the lead bicep. Both elbows near level. Right knee still flexed. Lead arm angled slightly inside the baseline (~20 degrees).
+
+P4 — TOP OF BACKSWING: Hands above and deeper than the trail shoulder. Right glute is the deepest point in the body. Trail knee has straightened (but not locked). Lead side of torso and lead thigh form roughly a 90-degree angle. Spine has extended from its P3 position. Head has moved toward the ball from its P3 position.
+
+P5 — LEAD ARM PARALLEL (downswing): Mirror of P3 but on the way down. Lead side has shifted over the lead foot. Hands still above shoulder height. Lead shoulder moving up, trail shoulder moving down. Lead knee beginning to straighten. Lead wrist cocked at maximum. Lead arm pinned against the upper lead pec.
+
+P6 — SHAFT PARALLEL (downswing): Clubshaft parallel to the ground on the way down. Trail elbow flexed approximately 120 degrees, connected to torso just above the belt. Lead knee continuing to straighten. Lead shoulder moving up. Lead wrist still fully cocked. Club approaching from inside the target line.
+
+P7 — IMPACT: Club back at the ball. Lead knee straight. Lead shoulder up and beginning to move back away from target. Trail elbow still slightly flexed. Lead wrist uncocking through impact. Hips open to target, weight predominantly on lead side.
+
+P8 — SHAFT PARALLEL (follow-through): Clubshaft parallel to ground past impact. Lead shoulder moving up and back (away from target). Trail shoulder moving down and forward (toward target). Lead ear now behind where the ball was. Only the heel of the trail foot lifted off ground.
+
+P9 — TRAIL ARM PARALLEL (follow-through): Trail arm parallel to the ground in follow-through. Arms extended, chest rotating toward target. Full weight transfer to lead side. Club continuing to release.
+
+P10 — FINISH: Full finish. Lead shoulder well behind original ball position. Belt buckle/hips pushed toward target. Weight on outside edge of lead foot, trail foot balanced on toe. Trail ear lower than lead ear. Lead elbow below lead shoulder. Thighs sealed together.
 
 IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
 
