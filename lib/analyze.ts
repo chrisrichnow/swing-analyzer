@@ -8,54 +8,118 @@ const ext = process.platform === "win32" ? ".exe" : "";
 const FFMPEG = join(process.cwd(), `node_modules/ffmpeg-static/ffmpeg${ext}`);
 const FFPROBE = join(process.cwd(), `node_modules/ffprobe-static/bin/${process.platform}/${process.arch}/ffprobe${ext}`);
 
-const FRAME_COUNT = 18;
+const SCAN_FPS = 60;
+const FRAME_SIZE = 160 * 90;
 
-function detectSwingWindow(videoPath: string, videoDuration: number): { start: number; duration: number } {
-  const scanFps = 6;
-  const frameSize = 160 * 90;
+function smooth(diffs: number[], window: number): number[] {
+  return diffs.map((_, i) => {
+    const lo = Math.max(0, i - window);
+    const hi = Math.min(diffs.length - 1, i + window);
+    let sum = 0;
+    for (let j = lo; j <= hi; j++) sum += diffs[j];
+    return sum / (hi - lo + 1);
+  });
+}
 
+function cumulativeSum(arr: number[], start: number, end: number): number[] {
+  const cum = [0];
+  for (let i = start + 1; i <= end; i++) cum.push(cum[cum.length - 1] + arr[i]);
+  return cum;
+}
+
+function frameAtRatio(start: number, cum: number[], ratio: number): number {
+  const target = cum[cum.length - 1] * ratio;
+  for (let i = 0; i < cum.length; i++) {
+    if (cum[i] >= target) return start + i;
+  }
+  return start + cum.length - 1;
+}
+
+function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const rawFrames = execSync(
-    `"${FFMPEG}" -i "${videoPath}" -vf "fps=${scanFps},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
-    { maxBuffer: 50 * 1024 * 1024 }
+    `"${FFMPEG}" -i "${videoPath}" -vf "fps=${SCAN_FPS},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
+    { maxBuffer: 200 * 1024 * 1024 }
   );
 
-  const frameCount = Math.floor(rawFrames.length / frameSize);
-  if (frameCount < 3) return { start: 0, duration: videoDuration };
+  const frameCount = Math.floor(rawFrames.length / FRAME_SIZE);
+  const fallback = Array.from({ length: 10 }, (_, i) => Math.floor(i * frameCount / 10));
+  if (frameCount < 30) return fallback;
 
-  // Compute per-frame diffs
-  const diffs: number[] = [0];
-  let maxDiff = 0;
-  let peakIdx = Math.floor(frameCount / 2);
-
+  // Compute raw diffs then smooth
+  const raw: number[] = [0];
   for (let i = 1; i < frameCount; i++) {
-    let diff = 0;
-    const prevOff = (i - 1) * frameSize;
-    const currOff = i * frameSize;
-    for (let j = 0; j < frameSize; j++) {
-      diff += Math.abs(rawFrames[prevOff + j] - rawFrames[currOff + j]);
-    }
-    diffs.push(diff);
-    if (diff > maxDiff) {
-      maxDiff = diff;
-      peakIdx = i;
-    }
+    let d = 0;
+    const p = (i - 1) * FRAME_SIZE, c = i * FRAME_SIZE;
+    for (let j = 0; j < FRAME_SIZE; j++) d += Math.abs(rawFrames[p + j] - rawFrames[c + j]);
+    raw.push(d);
+  }
+  const s = smooth(raw, 3);
+  const maxDiff = Math.max(...s);
+  if (maxDiff === 0) return fallback;
+
+  // P7 — last peak above 80% of global max (handles practice swings)
+  let p7 = s.indexOf(maxDiff);
+  for (let i = frameCount - 1; i >= 0; i--) {
+    if (s[i] >= maxDiff * 0.80) { p7 = i; break; }
+  }
+  // Refine to actual local max in a 1s window around that candidate
+  const refineWindow = SCAN_FPS;
+  for (let i = Math.max(0, p7 - refineWindow); i <= Math.min(frameCount - 1, p7 + Math.floor(refineWindow * 0.5)); i++) {
+    if (s[i] > s[p7]) p7 = i;
   }
 
-  // Walk forward from start to find where motion first exceeds threshold (takeaway onset)
-  const motionThreshold = maxDiff * 0.10;
-  let motionOnset = 1;
-  for (let i = 1; i < peakIdx; i++) {
-    if (diffs[i] > motionThreshold) {
-      motionOnset = i;
-      break;
-    }
+  // P4 — last local min before P7 where motion drops below 15% of max (top of backswing is quiet)
+  let p4 = Math.floor(p7 * 0.5);
+  for (let i = p7 - 1; i >= 0; i--) {
+    if (s[i] < maxDiff * 0.15) { p4 = i; break; }
   }
 
-  // Start 0.4s before first motion (one clean address frame), end 2s after impact
-  const windowStart = Math.max(0, (motionOnset / scanFps) - 0.4);
-  const windowEnd = Math.min(videoDuration, (peakIdx / scanFps) + 2.0);
+  // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames)
+  let p1 = 0;
+  const addressQuietFrames = 5;
+  for (let i = p4 - addressQuietFrames; i >= addressQuietFrames; i--) {
+    let quiet = true;
+    for (let j = i; j < i + addressQuietFrames; j++) {
+      if (s[j] >= maxDiff * 0.05) { quiet = false; break; }
+    }
+    if (quiet) { p1 = i + addressQuietFrames; break; }
+  }
 
-  return { start: windowStart, duration: windowEnd - windowStart };
+  // P10 — first quiet frame after P7 (motion < 8% of max, sustained 0.3s = 18 frames)
+  const finishQuietFrames = Math.floor(SCAN_FPS * 0.3);
+  let p10 = Math.min(frameCount - 1, p7 + Math.floor(SCAN_FPS * 2.5));
+  for (let i = p7 + 1; i < frameCount - finishQuietFrames; i++) {
+    let quiet = true;
+    for (let j = i; j < i + finishQuietFrames; j++) {
+      if (s[j] >= maxDiff * 0.08) { quiet = false; break; }
+    }
+    if (quiet) { p10 = i + Math.floor(finishQuietFrames / 2); break; }
+  }
+
+  // Intermediates via cumulative motion with biomechanical priors
+  // P2: takeaway onset — first frame in P1→P4 exceeding 15% of backswing segment peak
+  const bsSlice = s.slice(p1, p4 + 1);
+  const bsPeak = Math.max(...bsSlice);
+  let p2 = p1 + 1;
+  for (let i = p1; i < p4; i++) {
+    if (s[i] >= bsPeak * 0.15) { p2 = i; break; }
+  }
+
+  // P3: 60% cumulative motion through backswing
+  const bsCum = cumulativeSum(s, p1, p4);
+  const p3 = frameAtRatio(p1, bsCum, 0.60);
+
+  // P5, P6: 35% and 75% cumulative motion through downswing
+  const dsCum = cumulativeSum(s, p4, p7);
+  const p5 = frameAtRatio(p4, dsCum, 0.35);
+  const p6 = frameAtRatio(p4, dsCum, 0.75);
+
+  // P8, P9: 25% and 60% cumulative motion through follow-through
+  const ftCum = cumulativeSum(s, p7, p10);
+  const p8 = frameAtRatio(p7, ftCum, 0.25);
+  const p9 = frameAtRatio(p7, ftCum, 0.60);
+
+  return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10];
 }
 
 function extractFrames(videoPath: string, outputDir: string): string[] {
@@ -68,15 +132,15 @@ function extractFrames(videoPath: string, outputDir: string): string[] {
   ).trim();
 
   const duration = parseFloat(probeResult);
-  const swing = detectSwingWindow(videoPath, duration);
-
-  execSync(
-    `"${FFMPEG}" -ss ${swing.start.toFixed(3)} -i "${videoPath}" -t ${swing.duration.toFixed(3)} -vf "fps=${FRAME_COUNT}/${swing.duration.toFixed(3)},scale=640:-2" -q:v 4 "${outputDir}/frame_%03d.jpg" -y -loglevel error`
-  );
+  const frameIndices = selectSwingFrames(videoPath, duration);
 
   const frames: string[] = [];
-  for (let i = 1; i <= FRAME_COUNT; i++) {
-    const framePath = join(outputDir, `frame_${String(i).padStart(3, "0")}.jpg`);
+  for (let i = 0; i < frameIndices.length; i++) {
+    const ts = (frameIndices[i] / SCAN_FPS).toFixed(4);
+    const framePath = join(outputDir, `frame_${String(i + 1).padStart(3, "0")}.jpg`);
+    execSync(
+      `"${FFMPEG}" -ss ${ts} -i "${videoPath}" -vframes 1 -vf "scale=640:-2" -q:v 4 "${framePath}" -y -loglevel error`
+    );
     if (existsSync(framePath)) frames.push(framePath);
   }
 
@@ -99,7 +163,20 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
     "face-on": `Camera: FACE-ON. Focus on: weight transfer, spine tilt, hip slide vs turn, head position, knee flex, balance, shoulder plane.`,
   };
 
-  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address through finish. Frame 1 is at or near address.
+  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have exactly 10 frames, evenly extracted across the full swing window — one per position. The mapping is fixed:
+
+Frame 1 = P1 (Address)
+Frame 2 = P2 (Takeaway)
+Frame 3 = P3 (Lead arm parallel, backswing)
+Frame 4 = P4 (Top of backswing)
+Frame 5 = P5 (Lead arm parallel, downswing)
+Frame 6 = P6 (Shaft parallel, downswing)
+Frame 7 = P7 (Impact)
+Frame 8 = P8 (Shaft parallel, follow-through)
+Frame 9 = P9 (Trail arm parallel, follow-through)
+Frame 10 = P10 (Finish)
+
+Analyze each frame as its assigned position. Set the "frame" field in your JSON response to match the frame number (1–10) for each position.
 
 CONTEXT:
 - Camera: ${angleLabel.toUpperCase()}
@@ -256,7 +333,7 @@ export async function runAnalysis(
   }
 
   const swingFrames: string[] = [];
-  for (let n = 1; n <= FRAME_COUNT; n++) {
+  for (let n = 1; n <= 10; n++) {
     const framePath = join(framesDir, `frame_${String(n).padStart(3, "0")}.jpg`);
     if (existsSync(framePath)) {
       swingFrames.push(`data:image/jpeg;base64,${readFileSync(framePath).toString("base64")}`);
