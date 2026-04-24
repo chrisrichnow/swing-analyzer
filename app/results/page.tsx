@@ -39,6 +39,7 @@ export default function ResultsPage() {
   const router = useRouter();
   const [result, setResult] = useState<SwingResult | null>(null);
   const [tab, setTab] = useState<"positions" | "drills">("positions");
+  const [expandedFrame, setExpandedFrame] = useState<string | null>(null);
 
   useEffect(() => {
     const raw = sessionStorage.getItem("swingResult");
@@ -115,16 +116,26 @@ export default function ResultsPage() {
             <p className="text-xs text-white/30 uppercase tracking-widest mb-3">Your Swing — {frames.length} Frames</p>
             <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
               {frames.map((src, i) => (
-                <div key={i} className="relative shrink-0">
+                <button key={i} className="relative shrink-0" onClick={() => setExpandedFrame(src)}>
                   <img
                     src={src}
                     alt={`Frame ${i + 1}`}
-                    className="h-24 w-auto rounded-lg object-cover"
+                    className="h-40 w-auto rounded-lg object-cover"
                   />
-                  <span className="absolute bottom-1 left-1 text-[9px] font-bold text-white/60 bg-black/50 rounded px-1">{i + 1}</span>
-                </div>
+                  <span className="absolute bottom-1 left-1 text-[10px] font-bold text-white/70 bg-black/60 rounded px-1">{i + 1}</span>
+                </button>
               ))}
             </div>
+          </div>
+        )}
+
+        {/* Frame lightbox */}
+        {expandedFrame && (
+          <div
+            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
+            onClick={() => setExpandedFrame(null)}
+          >
+            <img src={expandedFrame} alt="Frame" className="max-w-full max-h-full rounded-xl object-contain" />
           </div>
         )}
 

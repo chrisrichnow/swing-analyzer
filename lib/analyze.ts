@@ -22,6 +22,8 @@ function detectSwingWindow(videoPath: string, videoDuration: number): { start: n
   const frameCount = Math.floor(rawFrames.length / frameSize);
   if (frameCount < 3) return { start: 0, duration: videoDuration };
 
+  // Compute per-frame diffs
+  const diffs: number[] = [0];
   let maxDiff = 0;
   let peakIdx = Math.floor(frameCount / 2);
 
@@ -32,15 +34,26 @@ function detectSwingWindow(videoPath: string, videoDuration: number): { start: n
     for (let j = 0; j < frameSize; j++) {
       diff += Math.abs(rawFrames[prevOff + j] - rawFrames[currOff + j]);
     }
+    diffs.push(diff);
     if (diff > maxDiff) {
       maxDiff = diff;
       peakIdx = i;
     }
   }
 
-  const peakTime = peakIdx / scanFps;
-  const windowStart = Math.max(0, peakTime - 3.5);
-  const windowEnd = Math.min(videoDuration, peakTime + 2.0);
+  // Walk backwards from impact to find where motion drops below threshold (address/setup)
+  const motionThreshold = maxDiff * 0.06;
+  let motionOnset = peakIdx;
+  for (let i = peakIdx; i >= 1; i--) {
+    if (diffs[i] < motionThreshold) {
+      motionOnset = i;
+      break;
+    }
+  }
+
+  // Start 0.5s before motion onset to include one clean address frame
+  const windowStart = Math.max(0, (motionOnset / scanFps) - 0.5);
+  const windowEnd = Math.min(videoDuration, (peakIdx / scanFps) + 2.0);
 
   return { start: windowStart, duration: windowEnd - windowStart };
 }
