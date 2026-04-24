@@ -10,6 +10,11 @@ const FFPROBE = join(process.cwd(), `node_modules/ffprobe-static/bin/${process.p
 
 const SCAN_FPS = 60;
 const FRAME_SIZE = 160 * 90;
+const MIN_SWING_FRAMES = SCAN_FPS * 1.0;   // 60 frames = 1.0s minimum swing
+const MAX_SWING_FRAMES = SCAN_FPS * 6.0;   // 360 frames = 6.0s maximum swing
+const QUIET_ZONE_FRAMES = SCAN_FPS;         // 60 frames = 1s to qualify as a quiet zone
+const QUIET_THRESHOLD = 0.10;              // below 10% of global max = quiet
+const SWING_PEAK_THRESHOLD = 0.25;         // swing window must peak above 25% of global max
 
 function smooth(diffs: number[], window: number): number[] {
   return diffs.map((_, i) => {
@@ -35,6 +40,117 @@ function frameAtRatio(start: number, cum: number[], ratio: number): number {
   return start + cum.length - 1;
 }
 
+function detectSwingWindow(s: number[], frameCount: number): [number, number] {
+  const globalMax = Math.max(...s);
+
+  // Find contiguous "quiet zones" — runs of frames below 10% of global max, lasting >= 1 second
+  const quietZones: Array<[number, number]> = [];
+  let runStart = -1;
+  for (let i = 0; i < frameCount; i++) {
+    if (s[i] < globalMax * QUIET_THRESHOLD) {
+      if (runStart === -1) runStart = i;
+    } else {
+      if (runStart !== -1 && (i - runStart) >= QUIET_ZONE_FRAMES) {
+        quietZones.push([runStart, i - 1]);
+      }
+      runStart = -1;
+    }
+  }
+  if (runStart !== -1 && (frameCount - runStart) >= QUIET_ZONE_FRAMES) {
+    quietZones.push([runStart, frameCount - 1]);
+  }
+
+  // Candidate swing windows are the gaps between adjacent quiet zones
+  const gapBoundaries: Array<[number, number]> = [];
+  if (quietZones.length === 0) {
+    gapBoundaries.push([0, frameCount - 1]);
+  } else {
+    if (quietZones[0][0] > 0) gapBoundaries.push([0, quietZones[0][0] - 1]);
+    for (let i = 0; i < quietZones.length - 1; i++) {
+      gapBoundaries.push([quietZones[i][1] + 1, quietZones[i + 1][0] - 1]);
+    }
+    if (quietZones[quietZones.length - 1][1] < frameCount - 1) {
+      gapBoundaries.push([quietZones[quietZones.length - 1][1] + 1, frameCount - 1]);
+    }
+  }
+
+  // Filter candidates by duration and peak motion, pick the one with the highest peak
+  let bestWindow: [number, number] | null = null;
+  let bestPeak = 0;
+  for (const [gStart, gEnd] of gapBoundaries) {
+    const duration = gEnd - gStart + 1;
+    if (duration < MIN_SWING_FRAMES || duration > MAX_SWING_FRAMES) continue;
+    let windowPeak = 0;
+    for (let i = gStart; i <= gEnd; i++) {
+      if (s[i] > windowPeak) windowPeak = s[i];
+    }
+    if (windowPeak < globalMax * SWING_PEAK_THRESHOLD) continue;
+    if (windowPeak > bestPeak) { bestPeak = windowPeak; bestWindow = [gStart, gEnd]; }
+  }
+  if (bestWindow) return bestWindow;
+
+  // Fallback: 4-second window centered on the global peak
+  let globalPeakFrame = 0;
+  for (let i = 0; i < frameCount; i++) { if (s[i] > s[globalPeakFrame]) globalPeakFrame = i; }
+  const halfWindow = SCAN_FPS * 2;
+  return [Math.max(0, globalPeakFrame - halfWindow), Math.min(frameCount - 1, globalPeakFrame + halfWindow)];
+}
+
+function validateAndRefine(
+  s: number[],
+  swingStart: number,
+  swingEnd: number,
+  swingMax: number,
+  p1: number,
+  p4: number,
+  p7: number,
+  p10: number
+): [number, number, number, number] {
+  const MIN_BS = 15, MAX_BS = 240;   // backswing frames
+  const MIN_DS = 6,  MAX_DS = 120;   // downswing frames
+  const MIN_FT = 12, MAX_FT = 180;   // follow-through frames
+
+  function valid(a: number, b: number, c: number, d: number): boolean {
+    return (b - a) >= MIN_BS && (b - a) <= MAX_BS &&
+           (c - b) >= MIN_DS && (c - b) <= MAX_DS &&
+           (d - c) >= MIN_FT && (d - c) <= MAX_FT;
+  }
+
+  if (valid(p1, p4, p7, p10)) return [p1, p4, p7, p10];
+
+  // Pass 2: relax quiet thresholds by 2x and re-search
+  let p4r = swingStart + Math.floor((p7 - swingStart) * 0.5);
+  for (let i = p7 - 1; i >= swingStart; i--) {
+    if (s[i] < swingMax * 0.30) { p4r = i; break; }
+  }
+  let p1r = swingStart;
+  for (let i = p4r - 3; i >= swingStart + 3; i--) {
+    let quiet = true;
+    for (let j = i; j < i + 3; j++) { if (s[j] >= swingMax * 0.10) { quiet = false; break; } }
+    if (quiet) { p1r = i + 3; break; }
+  }
+  let p10r = Math.min(swingEnd, p7 + Math.floor(SCAN_FPS * 2.5));
+  for (let i = p7 + 1; i <= swingEnd - 9; i++) {
+    let quiet = true;
+    for (let j = i; j < i + 9; j++) { if (s[j] >= swingMax * 0.16) { quiet = false; break; } }
+    if (quiet) { p10r = i + 4; break; }
+  }
+  if (valid(p1r, p4r, p7, p10r)) return [p1r, p4r, p7, p10r];
+
+  // Pass 3: use window extremes as bounds
+  const p4exp = swingStart + Math.floor((p7 - swingStart) * 0.40);
+  if (valid(swingStart, p4exp, p7, swingEnd)) return [swingStart, p4exp, p7, swingEnd];
+
+  // Final fallback: evenly distribute 4 anchors within the window
+  const span = swingEnd - swingStart;
+  return [
+    swingStart,
+    swingStart + Math.floor(span * 0.33),
+    swingStart + Math.floor(span * 0.55),
+    swingEnd,
+  ];
+}
+
 function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const rawFrames = execSync(
     `"${FFMPEG}" -i "${videoPath}" -vf "fps=${SCAN_FPS},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
@@ -42,8 +158,10 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   );
 
   const frameCount = Math.floor(rawFrames.length / FRAME_SIZE);
-  const fallback = Array.from({ length: 10 }, (_, i) => Math.floor(i * frameCount / 10));
-  if (frameCount < 30) return fallback;
+  if (frameCount < 30) {
+    // Too few frames — distribute evenly across whole video
+    return Array.from({ length: 10 }, (_, i) => Math.floor(i * frameCount / 10));
+  }
 
   // Compute raw diffs then smooth
   const raw: number[] = [0];
@@ -55,71 +173,91 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   }
   const s = smooth(raw, 3);
   const maxDiff = Math.max(...s);
+
+  // Evenly distribute within the whole video as the last-resort fallback
+  const fallback = Array.from({ length: 10 }, (_, i) => Math.floor(i * frameCount / 10));
   if (maxDiff === 0) return fallback;
 
-  // P7 — last peak above 80% of global max (handles practice swings)
-  let p7 = s.indexOf(maxDiff);
-  for (let i = frameCount - 1; i >= 0; i--) {
-    if (s[i] >= maxDiff * 0.80) { p7 = i; break; }
-  }
-  // Refine to actual local max in a 1s window around that candidate
+  // Isolate the actual swing window to avoid locking onto TikTok loading screens or pre-roll
+  const [swingStart, swingEnd] = detectSwingWindow(s, frameCount);
+  const windowFallback = Array.from({ length: 10 }, (_, i) =>
+    swingStart + Math.floor(i * (swingEnd - swingStart) / 10)
+  );
+
+  // Compute the window-local max so all thresholds scale to the actual swing, not global noise
+  let swingMax = 0;
+  for (let i = swingStart; i <= swingEnd; i++) { if (s[i] > swingMax) swingMax = s[i]; }
+  if (swingMax === 0) return windowFallback;
+
+  // P7 — highest motion peak within the swing window
+  let p7 = swingStart;
+  for (let i = swingStart; i <= swingEnd; i++) { if (s[i] > s[p7]) p7 = i; }
+  // Refine to the local max in a 1s window around that candidate
   const refineWindow = SCAN_FPS;
-  for (let i = Math.max(0, p7 - refineWindow); i <= Math.min(frameCount - 1, p7 + Math.floor(refineWindow * 0.5)); i++) {
-    if (s[i] > s[p7]) p7 = i;
+  for (
+    let i = Math.max(swingStart, p7 - refineWindow);
+    i <= Math.min(swingEnd, p7 + Math.floor(refineWindow * 0.5));
+    i++
+  ) { if (s[i] > s[p7]) p7 = i; }
+
+  // P4 — last quiet point before P7, bounded by swingStart
+  let p4 = swingStart + Math.floor((p7 - swingStart) * 0.5);
+  for (let i = p7 - 1; i >= swingStart; i--) {
+    if (s[i] < swingMax * 0.15) { p4 = i; break; }
   }
 
-  // P4 — last local min before P7 where motion drops below 15% of max (top of backswing is quiet)
-  let p4 = Math.floor(p7 * 0.5);
-  for (let i = p7 - 1; i >= 0; i--) {
-    if (s[i] < maxDiff * 0.15) { p4 = i; break; }
-  }
-
-  // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames)
-  let p1 = 0;
+  // P1 — last sustained quiet window before P4, bounded by swingStart
+  let p1 = swingStart;
   const addressQuietFrames = 5;
-  for (let i = p4 - addressQuietFrames; i >= addressQuietFrames; i--) {
+  for (let i = p4 - addressQuietFrames; i >= swingStart + addressQuietFrames; i--) {
     let quiet = true;
     for (let j = i; j < i + addressQuietFrames; j++) {
-      if (s[j] >= maxDiff * 0.05) { quiet = false; break; }
+      if (s[j] >= swingMax * 0.05) { quiet = false; break; }
     }
     if (quiet) { p1 = i + addressQuietFrames; break; }
   }
 
-  // P10 — first quiet frame after P7 (motion < 8% of max, sustained 0.3s = 18 frames)
+  // P10 — first sustained quiet window after P7, bounded by swingEnd
   const finishQuietFrames = Math.floor(SCAN_FPS * 0.3);
-  let p10 = Math.min(frameCount - 1, p7 + Math.floor(SCAN_FPS * 2.5));
-  for (let i = p7 + 1; i < frameCount - finishQuietFrames; i++) {
+  let p10 = Math.min(swingEnd, p7 + Math.floor(SCAN_FPS * 2.5));
+  for (let i = p7 + 1; i <= swingEnd - finishQuietFrames; i++) {
     let quiet = true;
     for (let j = i; j < i + finishQuietFrames; j++) {
-      if (s[j] >= maxDiff * 0.08) { quiet = false; break; }
+      if (s[j] >= swingMax * 0.08) { quiet = false; break; }
     }
     if (quiet) { p10 = i + Math.floor(finishQuietFrames / 2); break; }
   }
 
+  // Validate temporal plausibility and progressively relax if needed
+  const [p1f, p4f, p7f, p10f] = validateAndRefine(s, swingStart, swingEnd, swingMax, p1, p4, p7, p10);
+
+  // Safety guard — monotonicity must hold
+  if (!(p1f < p4f && p4f < p7f && p7f < p10f)) return windowFallback;
+
   // Intermediates via cumulative motion with biomechanical priors
   // P2: takeaway onset — first frame in P1→P4 exceeding 15% of backswing segment peak
-  const bsSlice = s.slice(p1, p4 + 1);
+  const bsSlice = s.slice(p1f, p4f + 1);
   const bsPeak = Math.max(...bsSlice);
-  let p2 = p1 + 1;
-  for (let i = p1; i < p4; i++) {
+  let p2 = p1f + 1;
+  for (let i = p1f; i < p4f; i++) {
     if (s[i] >= bsPeak * 0.15) { p2 = i; break; }
   }
 
   // P3: 60% cumulative motion through backswing
-  const bsCum = cumulativeSum(s, p1, p4);
-  const p3 = frameAtRatio(p1, bsCum, 0.60);
+  const bsCum = cumulativeSum(s, p1f, p4f);
+  const p3 = frameAtRatio(p1f, bsCum, 0.60);
 
   // P5, P6: 35% and 75% cumulative motion through downswing
-  const dsCum = cumulativeSum(s, p4, p7);
-  const p5 = frameAtRatio(p4, dsCum, 0.35);
-  const p6 = frameAtRatio(p4, dsCum, 0.75);
+  const dsCum = cumulativeSum(s, p4f, p7f);
+  const p5 = frameAtRatio(p4f, dsCum, 0.35);
+  const p6 = frameAtRatio(p4f, dsCum, 0.75);
 
   // P8, P9: 25% and 60% cumulative motion through follow-through
-  const ftCum = cumulativeSum(s, p7, p10);
-  const p8 = frameAtRatio(p7, ftCum, 0.25);
-  const p9 = frameAtRatio(p7, ftCum, 0.60);
+  const ftCum = cumulativeSum(s, p7f, p10f);
+  const p8 = frameAtRatio(p7f, ftCum, 0.25);
+  const p9 = frameAtRatio(p7f, ftCum, 0.60);
 
-  return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10];
+  return [p1f, p2, p3, p4f, p5, p6, p7f, p8, p9, p10f];
 }
 
 function extractFrames(videoPath: string, outputDir: string): string[] {
@@ -206,6 +344,8 @@ P8 — SHAFT PARALLEL (follow-through): Clubshaft parallel to ground past impact
 P9 — TRAIL ARM PARALLEL (follow-through): Trail arm parallel to the ground in follow-through. Arms extended, chest rotating toward target. Full weight transfer to lead side. Club continuing to release.
 
 P10 — FINISH: Full finish. Lead shoulder well behind original ball position. Belt buckle/hips pushed toward target. Weight on outside edge of lead foot, trail foot balanced on toe. Trail ear lower than lead ear. Lead elbow below lead shoulder. Thighs sealed together.
+
+CONTENT QUALITY CHECK: Before analyzing, scan all 10 frames. If any frame appears to show a loading screen, social media overlay, title card, or non-golf content (no golfer visible), set that position's "grade" to "F", set "issue" to "Frame does not contain golf swing content — video may need trimming before re-upload", and set "what_is_good" to "N/A". Flag this in the "summary" so the user knows the video quality is the issue.
 
 IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
 
