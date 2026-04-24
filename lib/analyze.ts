@@ -3,13 +3,12 @@ import { execSync } from "child_process";
 import { readFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { Analysis, Drill, CameraAngle, Club } from "@/types";
-import ffmpegPath from "ffmpeg-static";
-import ffprobeStatic from "ffprobe-static";
 
-const FFMPEG = ffmpegPath ?? "ffmpeg";
-const FFPROBE = ffprobeStatic.path ?? "ffprobe";
+const ext = process.platform === "win32" ? ".exe" : "";
+const FFMPEG = join(process.cwd(), `node_modules/ffmpeg-static/ffmpeg${ext}`);
+const FFPROBE = join(process.cwd(), `node_modules/ffprobe-static/bin/${process.platform}/${process.arch}/ffprobe${ext}`);
 
-const FRAME_COUNT = 14;
+const FRAME_COUNT = 18;
 
 function detectSwingWindow(videoPath: string, videoDuration: number): { start: number; duration: number } {
   const scanFps = 6;
@@ -40,8 +39,8 @@ function detectSwingWindow(videoPath: string, videoDuration: number): { start: n
   }
 
   const peakTime = peakIdx / scanFps;
-  const windowStart = Math.max(0, peakTime - 2.0);
-  const windowEnd = Math.min(videoDuration, peakTime + 1.5);
+  const windowStart = Math.max(0, peakTime - 3.5);
+  const windowEnd = Math.min(videoDuration, peakTime + 2.0);
 
   return { start: windowStart, duration: windowEnd - windowStart };
 }
@@ -87,7 +86,7 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
     "face-on": `Camera: FACE-ON. Focus on: weight transfer, spine tilt, hip slide vs turn, head position, knee flex, balance, shoulder plane.`,
   };
 
-  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address through finish — the full swing window.
+  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have ${FRAME_COUNT} sequential frames captured from address (static setup) through finish — the full swing window. Frame 1 should show the golfer at address before any movement begins.
 
 CONTEXT:
 - Camera: ${angleLabel.toUpperCase()}
@@ -104,16 +103,16 @@ IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explana
   "overall_score": <0-100>,
   "summary": "<2-3 sentence executive summary>",
   "positions": {
-    "P1": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P2": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P3": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P4": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P5": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P6": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P7": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P8": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P9": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" },
-    "P10": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>", "reference_youtube_id": "<YouTube video ID or null>" }
+    "P1": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P2": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P3": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P4": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P5": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P6": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P7": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P8": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P9": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P10": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" }
   },
   "priority_fix": {
     "position": "<P#>",
@@ -122,8 +121,6 @@ IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explana
     "drill": "<specific drill>"
   }
 }
-
-For "reference_youtube_id": when a position has an issue, provide the YouTube video ID (the part after "?v=") of a well-known golf instruction video that clearly demonstrates the CORRECT version of that position/technique. Use videos from trusted channels you are confident exist: Rick Shiels Golf, Me And My Golf, Rotary Swing, Danny Maude, Clay Ballard (Top Speed Golf), Shawn Clement. Set to null if no issue or if you are not highly confident the video ID is correct.
 
 Be specific and honest. Reference what you actually see in the frames.`;
 }
@@ -187,7 +184,7 @@ export async function runAnalysis(
   club: Club,
   apiKey: string
 ) {
-  const client = new Anthropic({ apiKey });
+  const client = new Anthropic({ apiKey, maxRetries: 4 });
 
   const frames = extractFrames(videoPath, framesDir);
   if (frames.length === 0) throw new Error("No frames extracted from video.");
@@ -225,17 +222,11 @@ export async function runAnalysis(
     // drills are non-critical
   }
 
-  const referencedFrameNums = new Set<number>(
-    Object.values(analysis.positions)
-      .map((p) => p.frame)
-      .filter((n) => typeof n === "number" && n >= 1 && n <= FRAME_COUNT)
-  );
-
-  const swingFrames: Record<number, string> = {};
-  for (const n of referencedFrameNums) {
+  const swingFrames: string[] = [];
+  for (let n = 1; n <= FRAME_COUNT; n++) {
     const framePath = join(framesDir, `frame_${String(n).padStart(3, "0")}.jpg`);
     if (existsSync(framePath)) {
-      swingFrames[n] = `data:image/jpeg;base64,${readFileSync(framePath).toString("base64")}`;
+      swingFrames.push(`data:image/jpeg;base64,${readFileSync(framePath).toString("base64")}`);
     }
   }
 

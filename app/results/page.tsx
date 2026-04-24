@@ -109,6 +109,25 @@ export default function ResultsPage() {
           </div>
         </div>
 
+        {/* Filmstrip */}
+        {frames && frames.length > 0 && (
+          <div className="mb-8">
+            <p className="text-xs text-white/30 uppercase tracking-widest mb-3">Your Swing — {frames.length} Frames</p>
+            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+              {frames.map((src, i) => (
+                <div key={i} className="relative shrink-0">
+                  <img
+                    src={src}
+                    alt={`Frame ${i + 1}`}
+                    className="h-24 w-auto rounded-lg object-cover"
+                  />
+                  <span className="absolute bottom-1 left-1 text-[9px] font-bold text-white/60 bg-black/50 rounded px-1">{i + 1}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Tabs */}
         <div className="sticky top-0 z-20 -mx-5 px-5 pt-2 pb-3 bg-[#080808]/95 backdrop-blur-sm">
           <div className="flex gap-1 bg-white/5 rounded-xl p-1">
@@ -134,7 +153,6 @@ export default function ResultsPage() {
                 key={pos}
                 position={pos}
                 data={data}
-                frameDataUrl={frames?.[data.frame]}
               />
             ))}
           </div>
