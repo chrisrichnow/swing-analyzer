@@ -41,18 +41,18 @@ function detectSwingWindow(videoPath: string, videoDuration: number): { start: n
     }
   }
 
-  // Walk backwards from impact to find where motion drops below threshold (address/setup)
-  const motionThreshold = maxDiff * 0.06;
-  let motionOnset = peakIdx;
-  for (let i = peakIdx; i >= 1; i--) {
-    if (diffs[i] < motionThreshold) {
+  // Walk forward from start to find where motion first exceeds threshold (takeaway onset)
+  const motionThreshold = maxDiff * 0.10;
+  let motionOnset = 1;
+  for (let i = 1; i < peakIdx; i++) {
+    if (diffs[i] > motionThreshold) {
       motionOnset = i;
       break;
     }
   }
 
-  // Start 0.5s before motion onset to include one clean address frame
-  const windowStart = Math.max(0, (motionOnset / scanFps) - 0.5);
+  // Start 0.4s before first motion (one clean address frame), end 2s after impact
+  const windowStart = Math.max(0, (motionOnset / scanFps) - 0.4);
   const windowEnd = Math.min(videoDuration, (peakIdx / scanFps) + 2.0);
 
   return { start: windowStart, duration: windowEnd - windowStart };
