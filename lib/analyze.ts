@@ -10,6 +10,17 @@ const FFPROBE = join(process.cwd(), `node_modules/ffprobe-static/bin/${process.p
 
 const SCAN_FPS = 60;
 const FRAME_SIZE = 160 * 90;
+const MAX_DURATION_SEC = 30;
+
+export function probeDurationSec(videoPath: string): number {
+  const out = execSync(
+    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "${videoPath}"`,
+    { encoding: "utf8" }
+  ).trim();
+  const d = parseFloat(out);
+  if (!isFinite(d) || d <= 0) throw new Error("Could not read video duration. File may be corrupt or unsupported.");
+  return d;
+}
 
 function smooth(diffs: number[], window: number): number[] {
   return diffs.map((_, i) => {
@@ -207,12 +218,11 @@ function extractFrames(videoPath: string, outputDir: string): string[] {
   if (existsSync(outputDir)) rmSync(outputDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
 
-  const probeResult = execSync(
-    `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "${videoPath}"`,
-    { encoding: "utf8" }
-  ).trim();
+  const duration = probeDurationSec(videoPath);
+  if (duration > MAX_DURATION_SEC) {
+    throw new Error(`Video too long: ${duration.toFixed(1)}s. Max ${MAX_DURATION_SEC}s — please trim and try again.`);
+  }
 
-  const duration = parseFloat(probeResult);
   const frameIndices = selectSwingFrames(videoPath, duration);
 
   const frames: string[] = [];
@@ -223,6 +233,10 @@ function extractFrames(videoPath: string, outputDir: string): string[] {
       `"${FFMPEG}" -ss ${ts} -i "${videoPath}" -vframes 1 -vf "scale=640:-2" -q:v 4 "${framePath}" -y -loglevel error`
     );
     if (existsSync(framePath)) frames.push(framePath);
+  }
+
+  if (frames.length !== 10) {
+    throw new Error(`Frame extraction produced ${frames.length}/10 frames. Video may be too short or corrupt.`);
   }
 
   return frames;
@@ -317,7 +331,28 @@ Be specific and honest. Reference what you actually see in the frames.`;
 }
 
 function cleanJson(text: string): string {
-  return text.replace(/^```json\n?/, "").replace(/\n?```$/, "").trim();
+  let t = text.replace(/^```(?:json)?\n?/, "").replace(/\n?```$/, "").trim();
+  // Strip any preface like "Here's the analysis:" — slice from the first { or [ to its matching close.
+  const firstObj = t.indexOf("{");
+  const firstArr = t.indexOf("[");
+  const candidates = [firstObj, firstArr].filter(i => i >= 0);
+  if (candidates.length === 0) return t;
+  const start = Math.min(...candidates);
+  const opener = t[start];
+  const closer = opener === "{" ? "}" : "]";
+  const end = t.lastIndexOf(closer);
+  if (end > start) t = t.slice(start, end + 1);
+  return t.trim();
+}
+
+function parseModelJson<T>(text: string, label: string): T {
+  const cleaned = cleanJson(text);
+  try {
+    return JSON.parse(cleaned) as T;
+  } catch (e) {
+    const preview = cleaned.slice(0, 200);
+    throw new Error(`Model returned invalid JSON for ${label}: ${(e as Error).message}. Got: ${preview}`);
+  }
 }
 
 const GRADE_ORDER: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
@@ -365,7 +400,7 @@ IMPORTANT: Respond with ONLY valid JSON array. No markdown, no code fences.
     messages: [{ role: "user", content: prompt }],
   });
 
-  return JSON.parse(cleanJson((response.content[0] as { text: string }).text));
+  return parseModelJson<Drill[]>((response.content[0] as { text: string }).text, "drills");
 }
 
 export async function runAnalysis(
@@ -402,8 +437,9 @@ export async function runAnalysis(
     messages: [{ role: "user", content: contentBlocks }],
   });
 
-  const analysis: Analysis = JSON.parse(
-    cleanJson((analysisResponse.content[0] as { text: string }).text)
+  const analysis = parseModelJson<Analysis>(
+    (analysisResponse.content[0] as { text: string }).text,
+    "swing analysis"
   );
 
   let drills: Drill[] = [];
@@ -420,8 +456,6 @@ export async function runAnalysis(
       swingFrames.push(`data:image/jpeg;base64,${readFileSync(framePath).toString("base64")}`);
     }
   }
-
-  rmSync(framesDir, { recursive: true });
 
   return { analysis, drills, frames: swingFrames };
 }

@@ -2,7 +2,7 @@
 
 Reference list of known + likely issues with the swing analyzer pipeline. Knock down one by one.
 
-**Status:** TikTok scene-cut bug fixed and deployed (2026-04-24).
+**Status:** TikTok scene-cut bug fixed and deployed (2026-04-24). Defensive batch (#5, #7, #8, #9) fixed 2026-04-25 — pending deploy.
 
 ---
 
@@ -35,7 +35,7 @@ End-to-end verified on Rory video: scene cut at t=5.5s, frames 1–7 all the sam
 
 **4. Slow-motion video (240fps iPhone).** The peak motion smears across many more frames, max diff per frame is *lower*, and a 1.5s real swing becomes 6s of footage. The 0.3s "quiet" window for P10 detection (`lib/analyze.ts:89`) is calibrated assuming roughly normal-speed footage. Need to either detect playback speed from frame metadata or scale windows by detected swing duration.
 
-**5. Video too long / wrong format.** No file size or duration validation in `app/api/analyze/route.ts`. `execSync` has `maxBuffer: 200MB` for the raw frame scan — a 4-minute video at 60fps×160×90 = 207MB and crashes. A 500MB upload would also eat Fly disk in `tmpdir`. Need: max 30s, max 100MB, validate before processing.
+**5. ~~Video too long / wrong format.~~ DONE 2026-04-25.** ~~No file size or duration validation in `app/api/analyze/route.ts`. `execSync` has `maxBuffer: 200MB` for the raw frame scan — a 4-minute video at 60fps×160×90 = 207MB and crashes. A 500MB upload would also eat Fly disk in `tmpdir`. Need: max 30s, max 100MB, validate before processing.~~ Fixed: 100MB cap (413) in route.ts + 30s cap via ffprobe in `extractFrames`.
 
 **6. SessionStorage overflow.** `app/page.tsx:48` does `sessionStorage.setItem("swingResult", JSON.stringify(data))` with 10 base64-encoded JPEGs embedded. ~50KB × 10 = 500KB+. iOS Safari has a 5MB sessionStorage cap that's easily blown if frames are larger than expected. If it overflows, navigation to `/results` happens but the page is blank with no error. Fix: store frames server-side under the sessionId, fetch on results page.
 
@@ -43,11 +43,11 @@ End-to-end verified on Rory video: scene cut at t=5.5s, frames 1–7 all the sam
 
 ## Less likely but real
 
-**7. Claude returns non-JSON.** `cleanJson` only strips ` ```json ` fences (`lib/analyze.ts:238-240`). If the model prefixes "Here's the analysis:" or adds an apology, `JSON.parse` throws with the unhelpful message "Analysis failed." Make it a proper error, ideally with a retry.
+**7. ~~Claude returns non-JSON.~~ DONE 2026-04-25.** ~~`cleanJson` only strips ` ```json ` fences (`lib/analyze.ts:238-240`). If the model prefixes "Here's the analysis:" or adds an apology, `JSON.parse` throws with the unhelpful message "Analysis failed." Make it a proper error, ideally with a retry.~~ Fixed: `cleanJson` now slices from first `{`/`[` to its matching close, and `parseModelJson` throws a labeled error with a 200-char preview on failure.
 
-**8. Frame extraction silently drops frames.** `lib/analyze.ts:138-145` runs ffmpeg per frame, checks `existsSync(framePath)`, but if ffmpeg fails on one timestamp (e.g., past video end) it just doesn't add that frame. Then `runAnalysis` runs on 7 or 8 frames instead of 10, and the prompt promises Claude exactly 10. Mapping breaks. Need: hard fail if `frames.length !== 10`.
+**8. ~~Frame extraction silently drops frames.~~ DONE 2026-04-25.** ~~`lib/analyze.ts:138-145` runs ffmpeg per frame, checks `existsSync(framePath)`, but if ffmpeg fails on one timestamp (e.g., past video end) it just doesn't add that frame. Then `runAnalysis` runs on 7 or 8 frames instead of 10, and the prompt promises Claude exactly 10. Mapping breaks. Need: hard fail if `frames.length !== 10`.~~ Fixed: `extractFrames` now throws if `frames.length !== 10`.
 
-**9. Tmp file leak.** `runAnalysis` removes `framesDir` only on success path (`lib/analyze.ts:343`). On any throw, the video file *and* frames stay in `/tmp/swing_*` forever. Fly machines have small disks and will fill up. Wrap in try/finally that always cleans `sessionDir`.
+**9. ~~Tmp file leak.~~ DONE 2026-04-25.** ~~`runAnalysis` removes `framesDir` only on success path (`lib/analyze.ts:343`). On any throw, the video file *and* frames stay in `/tmp/swing_*` forever. Fly machines have small disks and will fill up. Wrap in try/finally that always cleans `sessionDir`.~~ Fixed: route.ts now `rmSync(sessionDir, {recursive, force})` in `finally` — covers both success and any throw, and removes the video file too (not just frames).
 
 **10. No rate limiting / no auth.** Anyone can hammer `/api/analyze` and burn the Anthropic budget. A single Sonnet 4.6 vision call with 10 frames isn't cheap — a malicious script could rack up real money in a day. At minimum, add a per-IP rate limit.
 
