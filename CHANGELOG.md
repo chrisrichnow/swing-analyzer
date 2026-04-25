@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-04-25
+- feat(ui): full-screen loading overlay with animated golfer
 - feat(ui): desktop dashboard layout
 - fix(swing-analyzer): defensive batch — size/duration caps, frame-count hard-fail, JSON robustness, tmp cleanup
 
