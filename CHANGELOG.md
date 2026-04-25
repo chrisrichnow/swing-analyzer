@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-04-25
+- fix(analyze): P4 detection works for fast-tempo swings without transition pause
 - fix(analyze): separate P6 from P7 + reduce P7 backward shift
 - fix(ui): drop CSS transition on bar (RAF restarts it 60x/sec, bar froze)
 - fix(ui): use pure inline styles for loading bar (Tailwind h-2/h-full collapse the width)
