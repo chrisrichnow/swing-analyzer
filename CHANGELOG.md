@@ -1,0 +1,20 @@
+# Changelog
+
+_Auto-updated on every push to master. Newest first._
+
+## 2026-04-24
+- ci: add workflow_dispatch for manual trigger
+- fix(analyze): handle scene-cut videos (TikTok overlays, edits)
+- redesign home: premium dark + gold accent, Barlow Condensed display type
+- rename header logo to "Golf Swing Analyzer"
+- Replace frame extraction with anchor + cumulative-motion algorithm
+- Add detailed P1-P10 visual cues to analysis prompt
+- Fix swing window: walk forward to find motion onset instead of backward
+- Fix swing window detection and increase filmstrip frame size
+- Fix ffprobe/ffmpeg path, add Dockerfile and Fly.io config
+- New files from Fly.io Launch
+
+## 2026-04-23
+- Initial commit — swing analyzer web app
+- Build swing analyzer web app (Phase 2)
+- Initial commit from Create Next App
