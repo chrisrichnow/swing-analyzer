@@ -121,10 +121,16 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     if (s[i] > s[p7]) p7 = i;
   }
 
-  // P4 — last local min before P7 where motion drops below 15% of max (top of backswing is quiet)
-  let p4 = Math.floor(p7 * 0.5);
-  for (let i = p7 - 1; i >= 0; i--) {
-    if (s[i] < maxDiff * 0.15) { p4 = i; break; }
+  // P4 — top of backswing. Constrained to a biomechanically realistic window
+  // (downswing duration is 0.18–0.55s for human swings). Pick the LOCAL MINIMUM
+  // in that window — that's the transition pause at the top. This avoids placing
+  // P4 way too early at a setup/waggle lull.
+  const p4SearchEnd = p7 - Math.floor(SCAN_FPS * 0.18);
+  const p4SearchStart = Math.max(segStart, p7 - Math.floor(SCAN_FPS * 0.55));
+  let p4 = p4SearchStart;
+  let p4Min = Infinity;
+  for (let i = p4SearchStart; i <= p4SearchEnd; i++) {
+    if (s[i] < p4Min) { p4Min = s[i]; p4 = i; }
   }
 
   // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames)
@@ -150,18 +156,12 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     if (quiet) { p10 = i + Math.floor(finishQuietFrames / 2); break; }
   }
 
-  // Intermediates via cumulative motion with biomechanical priors
-  // P2: takeaway onset — first frame in P1→P4 exceeding 15% of backswing segment peak
-  const bsSlice = s.slice(p1, p4 + 1);
-  const bsPeak = Math.max(...bsSlice);
-  let p2 = p1 + 1;
-  for (let i = p1; i < p4; i++) {
-    if (s[i] >= bsPeak * 0.15) { p2 = i; break; }
-  }
-
-  // P3: 60% cumulative motion through backswing
+  // P2, P3 — placed via cumulative motion through the backswing window.
+  // Cumulative integration washes out brief waggle motion that would otherwise
+  // pull P2 way back into the setup. P2 ≈ early takeaway, P3 ≈ late backswing.
   const bsCum = cumulativeSum(s, p1, p4);
-  const p3 = frameAtRatio(p1, bsCum, 0.60);
+  const p2 = frameAtRatio(p1, bsCum, 0.20);
+  const p3 = frameAtRatio(p1, bsCum, 0.65);
 
   // P5, P6: 35% and 75% cumulative motion through downswing
   const dsCum = cumulativeSum(s, p4, p7);
