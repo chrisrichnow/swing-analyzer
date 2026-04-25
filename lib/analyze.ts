@@ -21,6 +21,41 @@ function smooth(diffs: number[], window: number): number[] {
   });
 }
 
+function percentile(arr: number[], p: number): number {
+  if (arr.length === 0) return 0;
+  const sorted = [...arr].sort((a, b) => a - b);
+  return sorted[Math.min(sorted.length - 1, Math.floor(sorted.length * p))];
+}
+
+// Find timestamps of hard scene cuts (TikTok loading screens, edits, app overlays)
+function detectSceneCuts(videoPath: string): number[] {
+  try {
+    const out = execSync(
+      `"${FFMPEG}" -i "${videoPath}" -filter:v "select='gt(scene,0.4)',showinfo" -f null - 2>&1`,
+      { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 }
+    );
+    const matches = out.match(/pts_time:[0-9.]+/g) ?? [];
+    return matches.map(m => parseFloat(m.replace("pts_time:", "")));
+  } catch {
+    return [];
+  }
+}
+
+// Longest contiguous segment between scene cuts — that's where the real swing lives
+function longestCleanSegment(cuts: number[], duration: number): [number, number] {
+  const boundaries = [0, ...cuts.filter(c => c > 0 && c < duration), duration];
+  let bestStart = 0, bestEnd = duration, bestLen = -1;
+  for (let i = 0; i < boundaries.length - 1; i++) {
+    const len = boundaries[i + 1] - boundaries[i];
+    if (len > bestLen) {
+      bestLen = len;
+      bestStart = boundaries[i];
+      bestEnd = boundaries[i + 1];
+    }
+  }
+  return [bestStart, bestEnd];
+}
+
 function cumulativeSum(arr: number[], start: number, end: number): number[] {
   const cum = [0];
   for (let i = start + 1; i <= end; i++) cum.push(cum[cum.length - 1] + arr[i]);
@@ -42,24 +77,42 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   );
 
   const frameCount = Math.floor(rawFrames.length / FRAME_SIZE);
-  const fallback = Array.from({ length: 10 }, (_, i) => Math.floor(i * frameCount / 10));
+  const evenly = (start: number, end: number) =>
+    Array.from({ length: 10 }, (_, i) => Math.floor(start + (i * (end - start)) / 9));
+  const fallback = evenly(0, frameCount - 1);
   if (frameCount < 30) return fallback;
 
+  // Crop analysis to the longest cut-free segment — kills TikTok overlays / edits.
+  // Pad inward by 0.2s on each side so cut transitions don't bleed into the diff signal.
+  const cuts = detectSceneCuts(videoPath);
+  const [segStartSec, segEndSec] = longestCleanSegment(cuts, videoDuration);
+  const padFrames = Math.floor(SCAN_FPS * 0.2);
+  const segStart = Math.max(0, Math.floor(segStartSec * SCAN_FPS) + padFrames);
+  const segEnd = Math.min(frameCount - 1, Math.floor(segEndSec * SCAN_FPS) - padFrames);
+  if (segEnd - segStart < 30) return fallback;
+
   // Compute raw diffs then smooth
-  const raw: number[] = [0];
+  const raw: number[] = new Array(frameCount).fill(0);
   for (let i = 1; i < frameCount; i++) {
     let d = 0;
     const p = (i - 1) * FRAME_SIZE, c = i * FRAME_SIZE;
     for (let j = 0; j < FRAME_SIZE; j++) d += Math.abs(rawFrames[p + j] - rawFrames[c + j]);
-    raw.push(d);
+    raw[i] = d;
   }
-  const s = smooth(raw, 3);
-  const maxDiff = Math.max(...s);
-  if (maxDiff === 0) return fallback;
+  const sRaw = smooth(raw, 3);
 
-  // P7 — last peak above 80% of global max (handles practice swings)
-  let p7 = s.indexOf(maxDiff);
-  for (let i = frameCount - 1; i >= 0; i--) {
+  // Zero out anything outside the clean segment, then clip extreme outliers at 2× the 99th
+  // percentile within the segment. This preserves the real impact peak (so P7 detection still
+  // works) while killing single-frame artifacts that would poison percentage thresholds.
+  const segmentDiffs = sRaw.slice(segStart, segEnd + 1);
+  const outlierClip = percentile(segmentDiffs, 0.99) * 2;
+  const s = sRaw.map((v, i) => (i < segStart || i > segEnd) ? 0 : Math.min(v, outlierClip));
+  const maxDiff = Math.max(...s.slice(segStart, segEnd + 1));
+  if (maxDiff === 0) return evenly(segStart, segEnd);
+
+  // P7 — last peak above 80% of capped max within the clean segment
+  let p7 = segStart;
+  for (let i = segEnd; i >= segStart; i--) {
     if (s[i] >= maxDiff * 0.80) { p7 = i; break; }
   }
   // Refine to actual local max in a 1s window around that candidate
@@ -85,10 +138,11 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     if (quiet) { p1 = i + addressQuietFrames; break; }
   }
 
-  // P10 — first quiet frame after P7 (motion < 8% of max, sustained 0.3s = 18 frames)
+  // P10 — first quiet frame after P7 (motion < 8% of max, sustained 0.3s = 18 frames),
+  // bounded by the clean segment so we never walk into a scene cut / TikTok screen
   const finishQuietFrames = Math.floor(SCAN_FPS * 0.3);
-  let p10 = Math.min(frameCount - 1, p7 + Math.floor(SCAN_FPS * 2.5));
-  for (let i = p7 + 1; i < frameCount - finishQuietFrames; i++) {
+  let p10 = Math.min(segEnd, p7 + Math.floor(SCAN_FPS * 2.5));
+  for (let i = p7 + 1; i < segEnd - finishQuietFrames; i++) {
     let quiet = true;
     for (let j = i; j < i + finishQuietFrames; j++) {
       if (s[j] >= maxDiff * 0.08) { quiet = false; break; }
@@ -119,7 +173,17 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const p8 = frameAtRatio(p7, ftCum, 0.25);
   const p9 = frameAtRatio(p7, ftCum, 0.60);
 
-  return [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10];
+  // Sanity check — a real swing is roughly 1.0–4.5s end-to-end. If our picks collapse
+  // (all the same frame, or duration outside that range), fall back to evenly-spaced
+  // frames within the clean segment instead of returning garbage.
+  const swingDurationSec = (p10 - p1) / SCAN_FPS;
+  const positions = [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10];
+  const uniqueFrames = new Set(positions).size;
+  if (swingDurationSec < 1.0 || swingDurationSec > 5.0 || uniqueFrames < 8) {
+    return evenly(segStart, segEnd);
+  }
+
+  return positions;
 }
 
 function extractFrames(videoPath: string, outputDir: string): string[] {
