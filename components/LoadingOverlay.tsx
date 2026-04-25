@@ -73,7 +73,6 @@ export default function LoadingOverlay() {
                 background: "linear-gradient(to right, #D4A24C, #E8C375)",
                 boxShadow: "0 0 12px rgba(212, 162, 76, 0.5)",
                 borderRadius: "999px",
-                transition: "width 0.3s ease-out",
               }}
             />
           </div>
