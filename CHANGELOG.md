@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-04-25
+- fix(ui): make loading bar gradient render (inline style instead of Tailwind arbitrary)
 - chore: trigger CHANGELOG run for defensive batch (9f0d66b)
 - feat(ui): full-screen loading overlay with animated golfer
 - feat(ui): desktop dashboard layout
