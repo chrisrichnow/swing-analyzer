@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-04-24
+- docs: mark TikTok scene-cut bug as fixed
 - ci: add workflow_dispatch for manual trigger
 - fix(analyze): handle scene-cut videos (TikTok overlays, edits)
 - redesign home: premium dark + gold accent, Barlow Condensed display type
