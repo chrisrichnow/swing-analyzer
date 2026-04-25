@@ -67,7 +67,7 @@ export default function Home() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
               </svg>
             </div>
-            <span className="text-sm font-medium text-white/40 tracking-widest uppercase">Swing Analyzer</span>
+            <span className="text-sm font-medium text-white/40 tracking-widest uppercase">Golf Swing Analyzer</span>
           </div>
           <h1 className="text-3xl font-bold tracking-tight">Analyze your swing.</h1>
           <p className="text-white/50 mt-2 text-sm leading-relaxed">
