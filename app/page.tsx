@@ -3,6 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import UploadZone from "@/components/UploadZone";
+import LoadingOverlay from "@/components/LoadingOverlay";
 import { CameraAngle, Club } from "@/types";
 
 const CLUBS: { value: Club; label: string }[] = [
@@ -13,26 +14,18 @@ const CLUBS: { value: Club; label: string }[] = [
   { value: "wedge", label: "Wedge" },
 ];
 
-const STEPS = ["Uploading video...", "Extracting frames...", "Analyzing swing...", "Generating drills..."];
-
 export default function Home() {
   const router = useRouter();
   const [file, setFile] = useState<File | null>(null);
   const [angle, setAngle] = useState<CameraAngle>("dtl");
   const [club, setClub] = useState<Club>("mid-iron");
   const [loading, setLoading] = useState(false);
-  const [step, setStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   async function handleAnalyze() {
     if (!file) return;
     setLoading(true);
     setError(null);
-    setStep(0);
-
-    const stepInterval = setInterval(() => {
-      setStep((s) => (s < STEPS.length - 1 ? s + 1 : s));
-    }, 8000);
 
     try {
       const form = new FormData();
@@ -49,14 +42,13 @@ export default function Home() {
       router.push("/results");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
-    } finally {
-      clearInterval(stepInterval);
       setLoading(false);
     }
   }
 
   return (
     <main className="min-h-screen text-[#F5F2EC]">
+      {loading && <LoadingOverlay />}
       <div className="max-w-xl lg:max-w-3xl mx-auto px-5 lg:px-10 py-10 sm:py-14 flex flex-col gap-10">
 
         {/* Header */}
@@ -165,17 +157,7 @@ export default function Home() {
           disabled={!file || loading}
           className="cursor-pointer w-full py-4 rounded-2xl bg-gradient-to-r from-[#D4A24C] to-[#B8862F] hover:from-[#E0B05E] hover:to-[#C49237] disabled:from-white/10 disabled:to-white/10 disabled:text-white/30 text-[#0A0908] font-display font-bold text-lg uppercase tracking-widest transition-all duration-200 shadow-lg shadow-amber-900/30 disabled:shadow-none"
         >
-          {loading ? (
-            <span className="flex items-center justify-center gap-3">
-              <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
-                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" />
-              </svg>
-              {STEPS[step]}
-            </span>
-          ) : (
-            "Analyze Swing"
-          )}
+          Analyze Swing
         </button>
 
         <p className="text-center text-xs text-white/25 tracking-wide">
