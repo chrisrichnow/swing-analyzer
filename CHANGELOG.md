@@ -2,6 +2,10 @@
 
 _Auto-updated on every push to master. Newest first._
 
+## 2026-04-25
+- feat(ui): desktop dashboard layout
+- fix(swing-analyzer): defensive batch — size/duration caps, frame-count hard-fail, JSON robustness, tmp cleanup
+
 ## 2026-04-24
 - fix(analyze): detect true takeaway start to fix P2 placement
 - fix(analyze): correct P2 (takeaway) and P7 (impact) placement
