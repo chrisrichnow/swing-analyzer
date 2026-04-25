@@ -1,0 +1,52 @@
+name: Update CHANGELOG
+
+on:
+  push:
+    branches: [master]
+
+permissions:
+  contents: write
+
+jobs:
+  update:
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Regenerate CHANGELOG.md
+        run: |
+          {
+            echo "# Changelog"
+            echo ""
+            echo "_Auto-updated on every push to master. Newest first._"
+            echo ""
+            git log master \
+              --pretty=format:'%ad|%s' \
+              --date=short \
+              --no-merges \
+              --invert-grep --grep='\[skip ci\]' \
+            | awk -F'|' '
+                {
+                  if ($1 != prev) {
+                    if (NR > 1) print ""
+                    print "## " $1
+                    prev = $1
+                  }
+                  print "- " $2
+                }
+              '
+          } > CHANGELOG.md
+
+      - name: Commit if changed
+        run: |
+          if [[ -n "$(git status --porcelain CHANGELOG.md)" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add CHANGELOG.md
+            git commit -m "chore: update CHANGELOG [skip ci]"
+            git push
+          fi
