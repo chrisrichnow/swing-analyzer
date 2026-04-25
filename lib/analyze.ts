@@ -131,9 +131,11 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   for (let i = Math.max(0, p7 - refineWindow); i <= Math.min(frameCount - 1, p7 + Math.floor(refineWindow * 0.5)); i++) {
     if (s[i] > s[p7]) p7 = i;
   }
-  // The pixel-diff peak is the post-impact club whip, not impact itself.
-  // Shift back ~83ms (5 frames at 60fps) to land on the actual ball-strike moment.
-  p7 = Math.max(segStart, p7 - 5);
+  // The pixel-diff peak is slightly post-impact (club whip blur). Shift back
+  // 2 frames (~33ms at 60fps) to land closer to ball-strike. A bigger shift
+  // would push P7 into the same region as P6 — they're already biomechanically
+  // close (~50ms apart) so any over-correction makes them visually identical.
+  p7 = Math.max(segStart, p7 - 2);
 
   // P4 — top of backswing. Constrained to a biomechanically realistic window
   // (downswing duration is 0.18–0.55s for human swings). Pick the LOCAL MINIMUM
@@ -193,8 +195,8 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
 
   // P5, P6: 35% and 75% cumulative motion through downswing
   const dsCum = cumulativeSum(s, p4, p7);
-  const p5 = frameAtRatio(p4, dsCum, 0.35);
-  const p6 = frameAtRatio(p4, dsCum, 0.75);
+  const p5 = frameAtRatio(p4, dsCum, 0.30);
+  const p6 = frameAtRatio(p4, dsCum, 0.55);
 
   // P8, P9: 25% and 60% cumulative motion through follow-through
   const ftCum = cumulativeSum(s, p7, p10);
