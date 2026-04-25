@@ -2,6 +2,8 @@
 
 Reference list of known + likely issues with the swing analyzer pipeline. Knock down one by one.
 
+**Status:** TikTok scene-cut bug fixed and deployed (2026-04-24).
+
 ---
 
 ## Confirmed bug (from Rory TikTok video test)
