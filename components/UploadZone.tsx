@@ -26,10 +26,10 @@ export default function UploadZone({ onFile, file }: Props) {
 
   if (file) {
     return (
-      <div className="flex items-center justify-between gap-4 w-full px-4 py-4 rounded-2xl bg-green-500/10 border border-green-500/20">
+      <div className="flex items-center justify-between gap-4 w-full px-4 py-4 rounded-2xl bg-amber-500/10 border border-amber-500/20">
         <div className="flex items-center gap-3 min-w-0">
-          <div className="w-9 h-9 shrink-0 rounded-full bg-green-500/20 flex items-center justify-center">
-            <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <div className="w-9 h-9 shrink-0 rounded-full bg-amber-500/20 flex items-center justify-center">
+            <svg className="w-4 h-4 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
             </svg>
           </div>
@@ -55,12 +55,12 @@ export default function UploadZone({ onFile, file }: Props) {
       <div className="flex gap-3 sm:hidden">
         <button
           onClick={() => cameraInputRef.current?.click()}
-          className="flex-1 flex flex-col items-center justify-center gap-2 py-5 rounded-2xl bg-green-500/10 border border-green-500/20 active:bg-green-500/20 transition-colors"
+          className="flex-1 flex flex-col items-center justify-center gap-2 py-5 rounded-2xl bg-amber-500/10 border border-amber-500/20 active:bg-amber-500/20 transition-colors"
         >
-          <svg className="w-6 h-6 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <svg className="w-6 h-6 text-amber-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M15 10l4.553-2.069A1 1 0 0121 8.87V15.13a1 1 0 01-1.447.899L15 14M3 8a2 2 0 012-2h10a2 2 0 012 2v8a2 2 0 01-2 2H5a2 2 0 01-2-2V8z" />
           </svg>
-          <span className="text-sm font-medium text-green-400">Record Video</span>
+          <span className="text-sm font-medium text-amber-400">Record Video</span>
           <span className="text-xs text-white/30">Use camera</span>
         </button>
         <button
@@ -83,7 +83,7 @@ export default function UploadZone({ onFile, file }: Props) {
         onDrop={handleDrop}
         className={`
           hidden sm:flex relative flex-col items-center justify-center gap-3 w-full h-44 rounded-2xl border-2 border-dashed cursor-pointer transition-all
-          ${dragging ? "border-green-500 bg-green-500/10" : "border-white/20 bg-white/5 hover:border-white/40 hover:bg-white/10"}
+          ${dragging ? "border-amber-500 bg-amber-500/10" : "border-white/20 bg-white/5 hover:border-white/40 hover:bg-white/10"}
         `}
       >
         <div className="w-10 h-10 rounded-full bg-white/10 flex items-center justify-center">
