@@ -57,7 +57,7 @@ export default function Home() {
 
   return (
     <main className="min-h-screen text-[#F5F2EC]">
-      <div className="max-w-xl mx-auto px-5 py-10 sm:py-14 flex flex-col gap-10">
+      <div className="max-w-xl lg:max-w-3xl mx-auto px-5 lg:px-10 py-10 sm:py-14 flex flex-col gap-10">
 
         {/* Header */}
         <div className="flex flex-col gap-6">

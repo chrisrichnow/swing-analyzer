@@ -60,7 +60,7 @@ export default function ResultsPage() {
 
   return (
     <main className="min-h-screen bg-[#080808] text-white pb-16">
-      <div className="max-w-lg mx-auto px-5">
+      <div className="max-w-lg lg:max-w-6xl mx-auto px-5 lg:px-10">
 
         {/* Header */}
         <div className="py-8 flex items-center justify-between">
@@ -80,47 +80,50 @@ export default function ResultsPage() {
           </div>
         </div>
 
-        {/* Score Card */}
-        <div className="bg-white/5 border border-white/10 rounded-3xl p-6 mb-8">
-          <div className="flex items-center gap-6">
-            <ScoreRing score={analysis.overall_score} />
-            <div className="flex-1">
-              <div className="flex items-center gap-2 mb-2">
-                <span className="text-xs text-white/40 uppercase tracking-widest">Overall Grade</span>
-                <GradeBadge grade={overallGrade} size="sm" />
+        {/* Top row — Score Card + Priority Fix side-by-side on desktop */}
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
+          {/* Score Card */}
+          <div className="bg-white/5 border border-white/10 rounded-3xl p-6">
+            <div className="flex items-center gap-6">
+              <ScoreRing score={analysis.overall_score} />
+              <div className="flex-1">
+                <div className="flex items-center gap-2 mb-2">
+                  <span className="text-xs text-white/40 uppercase tracking-widest">Overall Grade</span>
+                  <GradeBadge grade={overallGrade} size="sm" />
+                </div>
+                <p className="text-sm text-white/70 leading-relaxed">{analysis.summary}</p>
               </div>
-              <p className="text-sm text-white/70 leading-relaxed">{analysis.summary}</p>
+            </div>
+          </div>
+
+          {/* Priority Fix */}
+          <div className="bg-green-500/10 border border-green-500/20 rounded-3xl p-6">
+            <div className="flex items-center gap-2 mb-3">
+              <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+              <span className="text-xs font-semibold text-green-400 uppercase tracking-widest">Priority Fix — {analysis.priority_fix.position}</span>
+            </div>
+            <p className="text-white font-medium mb-1">{analysis.priority_fix.problem}</p>
+            <p className="text-sm text-white/50 mb-3">{analysis.priority_fix.why_it_matters}</p>
+            <div className="bg-white/5 rounded-xl p-3">
+              <p className="text-xs text-white/40 mb-1">Drill</p>
+              <p className="text-sm text-white/80">{analysis.priority_fix.drill}</p>
             </div>
           </div>
         </div>
 
-        {/* Priority Fix */}
-        <div className="bg-green-500/10 border border-green-500/20 rounded-2xl p-5 mb-8">
-          <div className="flex items-center gap-2 mb-3">
-            <svg className="w-4 h-4 text-green-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-            </svg>
-            <span className="text-xs font-semibold text-green-400 uppercase tracking-widest">Priority Fix — {analysis.priority_fix.position}</span>
-          </div>
-          <p className="text-white font-medium mb-1">{analysis.priority_fix.problem}</p>
-          <p className="text-sm text-white/50 mb-3">{analysis.priority_fix.why_it_matters}</p>
-          <div className="bg-white/5 rounded-xl p-3">
-            <p className="text-xs text-white/40 mb-1">Drill</p>
-            <p className="text-sm text-white/80">{analysis.priority_fix.drill}</p>
-          </div>
-        </div>
-
-        {/* Filmstrip */}
+        {/* Filmstrip — horizontal scroll on mobile, 10-col grid edge-to-edge on desktop */}
         {frames && frames.length > 0 && (
           <div className="mb-8">
             <p className="text-xs text-white/30 uppercase tracking-widest mb-3">Your Swing — {frames.length} Frames</p>
-            <div className="flex gap-2 overflow-x-auto pb-2 scrollbar-hide">
+            <div className="flex lg:grid lg:grid-cols-10 gap-2 overflow-x-auto lg:overflow-visible pb-2 scrollbar-hide">
               {frames.map((src, i) => (
-                <button key={i} className="relative shrink-0" onClick={() => setExpandedFrame(src)}>
+                <button key={i} className="relative shrink-0 lg:shrink lg:w-full" onClick={() => setExpandedFrame(src)}>
                   <img
                     src={src}
                     alt={`Frame ${i + 1}`}
-                    className="h-40 w-auto rounded-lg object-cover"
+                    className="h-40 lg:h-auto w-auto lg:w-full rounded-lg object-cover lg:aspect-[3/5]"
                   />
                   <span className="absolute bottom-1 left-1 text-[10px] font-bold text-white/70 bg-black/60 rounded px-1">{i + 1}</span>
                 </button>
@@ -156,9 +159,9 @@ export default function ResultsPage() {
           </div>
         </div>
 
-        {/* Positions */}
+        {/* Positions — 1 col on mobile, 2 col on desktop */}
         {tab === "positions" && (
-          <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
             {positions.map(([pos, data]) => (
               <PositionCard
                 key={pos}
@@ -169,11 +172,11 @@ export default function ResultsPage() {
           </div>
         )}
 
-        {/* Drills */}
+        {/* Drills — 1 col on mobile, 2 col on desktop */}
         {tab === "drills" && (
-          <div className="flex flex-col gap-4">
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-5">
             {drills.length === 0 ? (
-              <p className="text-white/40 text-sm text-center py-8">No drills generated.</p>
+              <p className="text-white/40 text-sm text-center py-8 col-span-full">No drills generated.</p>
             ) : (
               drills.map((drill, i) => <DrillCard key={i} drill={drill} index={i} />)
             )}
