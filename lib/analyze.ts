@@ -138,15 +138,27 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   p7 = Math.max(segStart, p7 - 2);
 
   // P4 — top of backswing. Constrained to a biomechanically realistic window
-  // (downswing duration is 0.18–0.55s for human swings). Pick the LOCAL MINIMUM
-  // in that window — that's the transition pause at the top. This avoids placing
-  // P4 way too early at a setup/waggle lull.
+  // (downswing duration is 0.18–0.55s for human swings). Walk backward from the
+  // window end and pick the LAST frame where motion is still "quiet" (below 30%
+  // of the impact peak) — that's the moment right before motion ramps into the
+  // downswing. This works for both slow-tempo swings (where the transition pause
+  // is obvious) and fast-tempo swings (where there's no real pause, just a
+  // boundary between low and high motion). Falls back to local min if nothing
+  // qualifies.
   const p4SearchEnd = p7 - Math.floor(SCAN_FPS * 0.18);
   const p4SearchStart = Math.max(segStart, p7 - Math.floor(SCAN_FPS * 0.55));
-  let p4 = p4SearchStart;
-  let p4Min = Infinity;
-  for (let i = p4SearchStart; i <= p4SearchEnd; i++) {
-    if (s[i] < p4Min) { p4Min = s[i]; p4 = i; }
+  const downswingThreshold = maxDiff * 0.30;
+  let p4 = -1;
+  for (let i = p4SearchEnd; i >= p4SearchStart; i--) {
+    if (s[i] < downswingThreshold) { p4 = i; break; }
+  }
+  if (p4 === -1) {
+    // No quiet frame found — fall back to local minimum
+    p4 = p4SearchStart;
+    let p4Min = Infinity;
+    for (let i = p4SearchStart; i <= p4SearchEnd; i++) {
+      if (s[i] < p4Min) { p4Min = s[i]; p4 = i; }
+    }
   }
 
   // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames)
