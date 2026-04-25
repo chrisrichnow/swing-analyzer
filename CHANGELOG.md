@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-04-24
+- fix(analyze): correct P2 (takeaway) and P7 (impact) placement
 - fix(analyze): correct P4 detection + cumulative-motion P2/P3
 - docs: mark TikTok scene-cut bug as fixed
 - ci: add workflow_dispatch for manual trigger
