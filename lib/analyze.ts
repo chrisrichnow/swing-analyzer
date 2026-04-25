@@ -159,12 +159,26 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     if (quiet) { p10 = i + Math.floor(finishQuietFrames / 2); break; }
   }
 
-  // P2, P3 — placed via cumulative motion through the backswing window.
-  // Cumulative integration washes out brief waggle motion that would otherwise
-  // pull P2 way back into the setup. P2 ≈ early takeaway, P3 ≈ late backswing.
-  const bsCum = cumulativeSum(s, p1, p4);
-  const p2 = frameAtRatio(p1, bsCum, 0.35);
-  const p3 = frameAtRatio(p1, bsCum, 0.65);
+  // Find the actual takeaway start — first frame after P1 where motion stays
+  // above 30% of the BACKSWING peak motion (not impact peak) for a sustained
+  // 0.1s. Threshold is normalized against backswing peak so it filters out
+  // pre-swing waggle (which can be 25-35% of impact peak) but still triggers
+  // on real takeaway motion. On videos without a waggle, this falls back to
+  // takeawayStart ≈ P1 since real motion starts immediately.
+  const bsPeak = Math.max(...s.slice(p1, p4 + 1));
+  const sustainedFrames = Math.floor(SCAN_FPS * 0.1);
+  let takeawayStart = p1;
+  for (let i = p1; i < p4 - sustainedFrames; i++) {
+    let sustained = true;
+    for (let j = i; j < i + sustainedFrames; j++) {
+      if (s[j] < bsPeak * 0.30) { sustained = false; break; }
+    }
+    if (sustained) { takeawayStart = i; break; }
+  }
+  // P2 ≈ shaft horizontal at hip (25% of true backswing time)
+  // P3 ≈ lead arm parallel to ground (70% of true backswing time)
+  const p2 = takeawayStart + Math.floor((p4 - takeawayStart) * 0.25);
+  const p3 = takeawayStart + Math.floor((p4 - takeawayStart) * 0.70);
 
   // P5, P6: 35% and 75% cumulative motion through downswing
   const dsCum = cumulativeSum(s, p4, p7);
