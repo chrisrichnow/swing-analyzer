@@ -57,10 +57,14 @@ export default function LoadingOverlay() {
               {Math.floor(progress)}%
             </span>
           </div>
-          <div className="h-1.5 bg-white/10 rounded-full overflow-hidden">
+          <div className="h-2 bg-white/10 rounded-full overflow-hidden">
             <div
-              className="h-full bg-gradient-to-r from-[#D4A24C] to-[#E8C375] transition-all duration-300 ease-out shadow-lg shadow-amber-900/40"
-              style={{ width: `${progress}%` }}
+              className="h-full rounded-full transition-all duration-300 ease-out"
+              style={{
+                width: `${progress}%`,
+                background: "linear-gradient(to right, #D4A24C, #E8C375)",
+                boxShadow: "0 0 12px rgba(212, 162, 76, 0.5)",
+              }}
             />
           </div>
         </div>
