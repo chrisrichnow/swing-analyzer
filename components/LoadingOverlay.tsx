@@ -10,9 +10,13 @@ const STATUS_MESSAGES = [
   "Almost done...",
 ];
 
-export default function LoadingOverlay() {
+interface Props {
+  statusIndex?: number;
+}
+
+export default function LoadingOverlay({ statusIndex }: Props) {
   const [progress, setProgress] = useState(0);
-  const [statusIdx, setStatusIdx] = useState(0);
+  const [statusIdx, setStatusIdx] = useState(statusIndex ?? 0);
 
   // Logarithmic fake progress — fast at first, eases off, parks at 90% until parent unmounts
   useEffect(() => {
@@ -31,13 +35,17 @@ export default function LoadingOverlay() {
     return () => cancelAnimationFrame(raf);
   }, []);
 
-  // Cycle status messages every ~14s
+  // Drive status from prop when available; otherwise cycle on a timer
   useEffect(() => {
+    if (statusIndex !== undefined) {
+      setStatusIdx(Math.min(statusIndex, STATUS_MESSAGES.length - 1));
+      return;
+    }
     const id = setInterval(() => {
       setStatusIdx((i) => Math.min(STATUS_MESSAGES.length - 1, i + 1));
     }, 14000);
     return () => clearInterval(id);
-  }, []);
+  }, [statusIndex]);
 
   return (
     <div className="fixed inset-0 z-50 bg-[#0A0908]/95 backdrop-blur-md flex items-center justify-center">

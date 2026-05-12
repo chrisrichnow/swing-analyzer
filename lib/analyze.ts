@@ -228,7 +228,7 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   return positions;
 }
 
-function extractFrames(videoPath: string, outputDir: string): string[] {
+export function extractFrames(videoPath: string, outputDir: string): string[] {
   if (existsSync(outputDir)) rmSync(outputDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
 
@@ -371,6 +371,48 @@ function parseModelJson<T>(text: string, label: string): T {
 
 const GRADE_ORDER: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
 
+export async function analyzeSwing(
+  framePaths: string[],
+  cameraAngle: CameraAngle,
+  club: Club,
+  apiKey: string
+): Promise<Analysis> {
+  const client = new Anthropic({ apiKey, maxRetries: 4 });
+
+  const imageBlocks = framePaths.map((framePath) => ({
+    type: "image" as const,
+    source: {
+      type: "base64" as const,
+      media_type: "image/jpeg" as const,
+      data: readFileSync(framePath).toString("base64"),
+    },
+  }));
+
+  const contentBlocks: Anthropic.MessageParam["content"] = [];
+  imageBlocks.forEach((block, i) => {
+    contentBlocks.push({ type: "text", text: `Frame ${i + 1}/${framePaths.length}:` });
+    contentBlocks.push(block);
+  });
+  contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club) });
+
+  const response = await client.messages.create({
+    model: "claude-opus-4-7",
+    max_tokens: 4096,
+    messages: [{ role: "user", content: contentBlocks }],
+  });
+
+  return parseModelJson<Analysis>((response.content[0] as { text: string }).text, "swing analysis");
+}
+
+export async function generateDrills(
+  analysis: Analysis,
+  club: Club,
+  apiKey: string
+): Promise<Drill[]> {
+  const client = new Anthropic({ apiKey, maxRetries: 4 });
+  return getDrillRecommendations(client, analysis, club);
+}
+
 async function getDrillRecommendations(
   client: Anthropic,
   analysis: Analysis,
@@ -424,41 +466,14 @@ export async function runAnalysis(
   club: Club,
   apiKey: string
 ) {
-  const client = new Anthropic({ apiKey, maxRetries: 4 });
-
   const frames = extractFrames(videoPath, framesDir);
   if (frames.length === 0) throw new Error("No frames extracted from video.");
 
-  const imageBlocks = frames.map((framePath) => ({
-    type: "image" as const,
-    source: {
-      type: "base64" as const,
-      media_type: "image/jpeg" as const,
-      data: readFileSync(framePath).toString("base64"),
-    },
-  }));
-
-  const contentBlocks: Anthropic.MessageParam["content"] = [];
-  imageBlocks.forEach((block, i) => {
-    contentBlocks.push({ type: "text", text: `Frame ${i + 1}/${frames.length}:` });
-    contentBlocks.push(block);
-  });
-  contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club) });
-
-  const analysisResponse = await client.messages.create({
-    model: "claude-sonnet-4-6",
-    max_tokens: 4096,
-    messages: [{ role: "user", content: contentBlocks }],
-  });
-
-  const analysis = parseModelJson<Analysis>(
-    (analysisResponse.content[0] as { text: string }).text,
-    "swing analysis"
-  );
+  const analysis = await analyzeSwing(frames, cameraAngle, club, apiKey);
 
   let drills: Drill[] = [];
   try {
-    drills = await getDrillRecommendations(client, analysis, club);
+    drills = await generateDrills(analysis, club, apiKey);
   } catch {
     // drills are non-critical
   }

@@ -20,11 +20,13 @@ export default function Home() {
   const [angle, setAngle] = useState<CameraAngle>("dtl");
   const [club, setClub] = useState<Club>("mid-iron");
   const [loading, setLoading] = useState(false);
+  const [loadStep, setLoadStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
   async function handleAnalyze() {
     if (!file) return;
     setLoading(true);
+    setLoadStep(0);
     setError(null);
 
     try {
@@ -34,21 +36,49 @@ export default function Home() {
       form.append("club", club);
 
       const res = await fetch("/api/analyze", { method: "POST", body: form });
-      const data = await res.json();
 
-      if (!res.ok) throw new Error(data.error ?? "Analysis failed.");
+      if (!res.ok || !res.body) {
+        const data = await res.json().catch(() => ({}));
+        throw new Error((data as { error?: string }).error ?? "Analysis failed.");
+      }
 
-      sessionStorage.setItem("swingResult", JSON.stringify(data));
-      router.push("/results");
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const messages = buffer.split("\n\n");
+        buffer = messages.pop() ?? "";
+
+        for (const msg of messages) {
+          const dataLine = msg.split("\n").find((l) => l.startsWith("data: "));
+          if (!dataLine) continue;
+          const event = JSON.parse(dataLine.slice(6));
+
+          if (event.type === "status") {
+            setLoadStep(event.step ?? 0);
+          } else if (event.type === "error") {
+            throw new Error(event.message);
+          } else if (event.type === "done") {
+            sessionStorage.setItem("swingResult", JSON.stringify(event.result));
+            router.push("/results");
+          }
+        }
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : "Something went wrong.");
+    } finally {
       setLoading(false);
     }
   }
 
   return (
     <main className="min-h-screen text-[#F5F2EC]">
-      {loading && <LoadingOverlay />}
+      {loading && <LoadingOverlay statusIndex={loadStep} />}
       <div className="max-w-xl lg:max-w-3xl mx-auto px-5 lg:px-10 py-10 sm:py-14 flex flex-col gap-10">
 
         {/* Header */}
