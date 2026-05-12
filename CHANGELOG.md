@@ -2,6 +2,9 @@
 
 _Auto-updated on every push to master. Newest first._
 
+## 2026-05-11
+- Upgrade to Opus 4.7, stream SSE progress events
+
 ## 2026-04-25
 - fix(analyze): P4 detection works for fast-tempo swings without transition pause
 - fix(analyze): separate P6 from P7 + reduce P7 backward shift
