@@ -1,10 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import UploadZone from "@/components/UploadZone";
 import LoadingOverlay from "@/components/LoadingOverlay";
 import { CameraAngle, Club } from "@/types";
+import { createClient } from "@/lib/supabase/client";
 
 const CLUBS: { value: Club; label: string }[] = [
   { value: "driver", label: "Driver" },
@@ -22,6 +24,12 @@ export default function Home() {
   const [loading, setLoading] = useState(false);
   const [loadStep, setLoadStep] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [isLoggedIn, setIsLoggedIn] = useState<boolean | null>(null);
+
+  useEffect(() => {
+    const supabase = createClient();
+    if (supabase) supabase.auth.getUser().then(({ data }) => setIsLoggedIn(!!data.user));
+  }, []);
 
   async function handleAnalyze() {
     if (!file) return;
@@ -121,6 +129,21 @@ export default function Home() {
               Custom Drills
             </span>
           </div>
+
+          {/* Save-your-work banner for logged-out users */}
+          {isLoggedIn === false && (
+            <div className="flex items-center gap-3 bg-white/[0.04] border border-white/8 rounded-xl px-4 py-3">
+              <svg className="w-4 h-4 text-[#D4A24C] shrink-0" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M5 12h14M12 5l7 7-7 7" />
+              </svg>
+              <p className="text-xs text-white/45 leading-relaxed">
+                <Link href="/signup" className="text-[#D4A24C] hover:text-[#E8C375] transition-colors font-medium">
+                  Create a free account
+                </Link>{" "}
+                to save your analyses, track progress over time, and get AI coaching based on your history.
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Upload */}
