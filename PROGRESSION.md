@@ -12,3 +12,6 @@ Auto-updated by git post-commit hook. Each entry = one commit.
 
 ## 2026-06-14 — Add visual impact (P7) refinement for unreliable motion-peak picks
 `c855c53` — Pixel-diff motion peak has no consistent offset across angles/clubs/lighting — a fixed shift can't fix it. When P7 can't be trusted (low confidence, face-on angle, non-isolated peak), extract a dense full-fps strip and have Sonnet pick exact ball-strike. Face-on impact moved from P6 (1.48s) to dead-on the ball (1.55s). All 7 test clips produce clean, correctly-ordered positions.
+
+## 2026-06-14 — Add PROGRESSION.md auto-log and fix local Supabase crash
+`62d2c74`

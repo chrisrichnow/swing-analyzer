@@ -20,6 +20,7 @@ export interface Analysis {
   summary: string;
   positions: Record<string, PositionData>;
   priority_fix: PriorityFix;
+  drills: Drill[];
 }
 
 export interface Drill {
@@ -41,6 +42,7 @@ export interface SwingResult {
   analysis: Analysis;
   drills: Drill[];
   frames?: string[];
+  analysisId?: string | null;
 }
 
 export type CameraAngle = "dtl" | "face-on";

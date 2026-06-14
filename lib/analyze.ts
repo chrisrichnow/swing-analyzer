@@ -12,18 +12,25 @@ const SCAN_FPS = 60;
 const FRAME_SIZE = 160 * 90;
 const MAX_DURATION_SEC = 30;
 
-// When the math-based frame selector trusts its own pick less than this, we
-// escalate to the AI-mapping fallback (let the model read the actual frames).
-const CONFIDENCE_THRESHOLD = 0.6;
-// How many evenly-spaced frames to hand the model in the AI-mapping fallback.
-const AI_CANDIDATE_COUNT = 24;
+// NOTE: we no longer escalate to AI frame-mapping below a confidence threshold —
+// validation showed it was consistently WORSE than the pure-math pick. The
+// confidence score is still computed below for diagnostics (the validate script
+// prints it), but it no longer gates any behaviour.
 // Impact refinement: the pixel-diff motion peak is an unreliable impact locator
 // (post-impact blur biases it late on DTL irons; the fast downswing sweep biases
 // it early on face-on; background/shadow motion throws it off entirely). When the
 // rough P7 can't be trusted we extract a dense full-fps strip around it and let a
 // cheap model pick the exact ball-strike frame. Window is seconds each side.
-const IMPACT_REFINE_BEFORE = 0.18;
-const IMPACT_REFINE_AFTER = 0.18;
+// Impact-refine window is asymmetric and angle-aware. On DTL the pixel-diff peak
+// sits slightly POST-impact (club blur), so true impact is just before the rough
+// pick — a tight, slightly-before window. On FACE-ON the motion peak fires EARLY
+// (max angular velocity is mid-downswing, not at the ball), so true impact is
+// LATER — the window must reach well past the rough pick or it won't contain
+// impact at all (this is exactly why the old symmetric ±0.18s window missed it).
+const IMPACT_REFINE_WINDOW: Record<CameraAngle, { before: number; after: number }> = {
+  dtl: { before: 0.20, after: 0.18 },
+  "face-on": { before: 0.12, after: 0.35 },
+};
 const IMPACT_REFINE_MODEL = "claude-sonnet-4-6";
 // Reject a refined P7 that lands implausibly close to P4 (would collapse the
 // downswing frames) — a real downswing is at least this long.
@@ -72,12 +79,17 @@ function percentile(arr: number[], p: number): number {
 
 // Find timestamps of hard scene cuts (TikTok loading screens, edits, app overlays)
 function detectSceneCuts(videoPath: string): number[] {
+  const t0 = Date.now();
   try {
+    // Downscale to 320px wide BEFORE the scene filter — scene-change detection is
+    // a per-pixel cost, and cuts are just as detectable at low res. Saves several
+    // seconds on high-res phone clips for zero accuracy loss.
     const out = execSync(
-      `"${FFMPEG}" -i "${videoPath}" -filter:v "select='gt(scene,0.4)',showinfo" -f null - 2>&1`,
+      `"${FFMPEG}" -i "${videoPath}" -filter:v "scale=320:-2,select='gt(scene,0.4)',showinfo" -f null - 2>&1`,
       { encoding: "utf8", maxBuffer: 50 * 1024 * 1024 }
     );
     const matches = out.match(/pts_time:[0-9.]+/g) ?? [];
+    console.log(`[timing] detectSceneCuts: ${Date.now() - t0}ms`);
     return matches.map(m => parseFloat(m.replace("pts_time:", "")));
   } catch {
     return [];
@@ -114,10 +126,12 @@ function frameAtRatio(start: number, cum: number[], ratio: number): number {
 }
 
 export function selectSwingFrames(videoPath: string, videoDuration: number): FrameSelection {
+  const tScan = Date.now();
   const rawFrames = execSync(
     `"${FFMPEG}" -i "${videoPath}" -vf "fps=${SCAN_FPS},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
     { maxBuffer: 200 * 1024 * 1024 }
   );
+  console.log(`[timing] gray-scan decode (${SCAN_FPS}fps): ${Date.now() - tScan}ms`);
 
   const frameCount = Math.floor(rawFrames.length / FRAME_SIZE);
   const evenly = (start: number, end: number) =>
@@ -278,10 +292,10 @@ export function selectSwingFrames(videoPath: string, videoDuration: number): Fra
     return fallback(segStartSec, segEndSec, segStart, segEnd);
   }
 
-  // Confidence — how much we trust this pick. The two swing boundaries (a real
-  // still address and a real still finish) are the strongest signals; a clean
-  // transition at P4, a healthy total duration, and a sharply dominant impact
-  // peak round it out. Below CONFIDENCE_THRESHOLD we let the AI read the frames.
+  // Confidence — how much we trust this pick (diagnostics only now). The two swing
+  // boundaries (a real still address and a real still finish) are the strongest
+  // signals; a clean transition at P4, a healthy total duration, and a sharply
+  // dominant impact peak round it out.
   const p90 = percentile(segmentDiffs, 0.90);
   const peakDominant = maxDiff / (p90 + 1e-6) > 2.5;
   const durationHealthy = swingDurationSec >= 1.2 && swingDurationSec <= 2.6;
@@ -320,86 +334,6 @@ function extractCandidateStrip(
   return { dir, frames };
 }
 
-function buildMappingPrompt(n: number, cameraAngle?: CameraAngle, club?: Club): string {
-  const angleLabel = cameraAngle === "dtl" ? "DOWN-THE-LINE" : cameraAngle === "face-on" ? "FACE-ON" : "UNKNOWN";
-  return `You are a golf biomechanics expert. Below are ${n} still frames sampled in time order from a SINGLE golf swing (Frame 1 is earliest, Frame ${n} is latest). The clip may include footage before and after the actual swing — setup, waggle, walk-up, or the player watching the shot.
-
-Identify which frame number best matches each of the 10 swing positions. The positions always occur in strict time order: P1 < P2 < P3 < P4 < P5 < P6 < P7 < P8 < P9 < P10.
-
-Camera angle: ${angleLabel}${club ? `. Club: ${club.replace("-", " ").toUpperCase()}` : ""}.
-
-- P1 Address: static setup over the ball, before any motion starts.
-- P2 Takeaway: club shaft parallel to the ground at hip height, early backswing.
-- P3 Lead arm parallel to the ground, backswing.
-- P4 Top of backswing: hands highest, club fully back, the instant motion reverses.
-- P5 Lead arm parallel to the ground, downswing (mirror of P3).
-- P6 Club shaft parallel to the ground, downswing, just before impact.
-- P7 Impact: club meets the ball — usually the fastest, most motion-blurred frame.
-- P8 Club shaft parallel to the ground, follow-through, just after impact.
-- P9 Trail arm parallel to the ground, follow-through.
-- P10 Finish: balanced final pose, motion stopped.
-
-Respond with ONLY valid JSON, no markdown, no explanation:
-{"P1":<n>,"P2":<n>,"P3":<n>,"P4":<n>,"P5":<n>,"P6":<n>,"P7":<n>,"P8":<n>,"P9":<n>,"P10":<n>}`;
-}
-
-// AI-mapping fallback: hand the model a strip of frames and let it identify which
-// frame is each position. Returns 10 scan-fps frame indices, or null if it fails
-// (so the caller can fall back to the best-effort math pick).
-async function aiMapPositions(
-  videoPath: string,
-  startSec: number,
-  endSec: number,
-  apiKey: string,
-  cameraAngle?: CameraAngle,
-  club?: Club
-): Promise<number[] | null> {
-  const { dir, frames } = extractCandidateStrip(videoPath, startSec, endSec, AI_CANDIDATE_COUNT);
-  try {
-    if (frames.length < 10) return null;
-
-    const client = new Anthropic({ apiKey, maxRetries: 3 });
-    const content: Anthropic.MessageParam["content"] = [];
-    frames.forEach((f, i) => {
-      content.push({ type: "text", text: `Frame ${i + 1}:` });
-      content.push({
-        type: "image",
-        source: { type: "base64", media_type: "image/jpeg", data: readFileSync(f.path).toString("base64") },
-      });
-    });
-    content.push({ type: "text", text: buildMappingPrompt(frames.length, cameraAngle, club) });
-
-    const resp = await client.messages.create({
-      model: "claude-sonnet-4-6",
-      max_tokens: 512,
-      messages: [{ role: "user", content }],
-    });
-
-    const map = parseModelJson<Record<string, number>>((resp.content[0] as { text: string }).text, "frame mapping");
-
-    // Read picks in swing order, clamping into range and forcing strictly
-    // increasing — the model can't reorder time, so a non-monotonic answer is noise.
-    const order = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"];
-    const picks: number[] = [];
-    let prev = 0;
-    for (const pos of order) {
-      let n = Math.round(Number(map[pos]));
-      if (!Number.isFinite(n)) return null;
-      n = Math.min(Math.max(n, 1), frames.length);
-      if (n <= prev) n = Math.min(prev + 1, frames.length);
-      prev = n;
-      picks.push(n);
-    }
-
-    // Candidate frame number -> scan-fps index via its source timestamp.
-    return picks.map((n) => Math.max(0, Math.round(frames[n - 1].sec * SCAN_FPS)));
-  } catch {
-    return null;
-  } finally {
-    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
-  }
-}
-
 // Refine impact (P7) visually: extract a dense strip at full scan-fps around the
 // rough P7 and let a cheap model pick the exact ball-strike frame. Returns the
 // refined scan-fps index, or null if it fails. Robust to lighting/shadow (it sees
@@ -412,8 +346,9 @@ async function refineImpact(
   cameraAngle?: CameraAngle,
   club?: Club
 ): Promise<number | null> {
-  const startSec = Math.max(0, roughP7Sec - IMPACT_REFINE_BEFORE);
-  const endSec = Math.min(duration, roughP7Sec + IMPACT_REFINE_AFTER);
+  const win = IMPACT_REFINE_WINDOW[cameraAngle ?? "dtl"];
+  const startSec = Math.max(0, roughP7Sec - win.before);
+  const endSec = Math.min(duration, roughP7Sec + win.after);
   const count = Math.max(1, Math.round((endSec - startSec) * SCAN_FPS) + 1);
   const { dir, frames } = extractCandidateStrip(videoPath, startSec, endSec, count);
   try {
@@ -438,11 +373,13 @@ Identify the single frame at IMPACT — the clubhead exactly at the ball, the in
 Respond with ONLY valid JSON, no markdown: {"impact": <frame number 1-${frames.length}>}`,
     });
 
+    const tRefine = Date.now();
     const resp = await client.messages.create({
       model: IMPACT_REFINE_MODEL,
       max_tokens: 128,
       messages: [{ role: "user", content }],
     });
+    console.log(`[timing] refineImpact model call: ${Date.now() - tRefine}ms`);
 
     const parsed = parseModelJson<{ impact: number }>((resp.content[0] as { text: string }).text, "impact refinement");
     let n = Math.round(Number(parsed.impact));
@@ -468,30 +405,22 @@ function reanchorAroundP7(indices: number[], newP7: number): number[] {
   return [p1, indices[1], indices[2], p4, p5, p6, p7, p8, p9, p10];
 }
 
-// Orchestrator: trust the fast math pick when it's confident, otherwise let the
-// model read the frames. Then refine impact (P7) when the rough pick can't be
-// trusted. Pure-math when no apiKey is supplied.
+// Orchestrator: trust the math pick (validation showed it beats AI frame-mapping
+// on every DTL clip). Refine impact (P7) only on FACE-ON, where the motion-peak
+// fires early and needs a visual fix — on DTL the motion-peak is reliable and the
+// refine actively pulls impact pre-strike, so we leave it alone. Pure-math when no
+// apiKey is supplied.
 export async function selectSwingFramesSmart(
   videoPath: string,
   duration: number,
   opts?: ExtractOpts
 ): Promise<number[]> {
   const sel = selectSwingFrames(videoPath, duration);
-
   let indices = sel.indices;
-  if (opts?.apiKey && sel.confidence < CONFIDENCE_THRESHOLD) {
-    opts.onProgress?.("Double-checking frame selection with AI...");
-    const ai = await aiMapPositions(videoPath, sel.segStartSec, sel.segEndSec, opts.apiKey, opts.cameraAngle, opts.club);
-    if (ai) indices = ai;
-  }
 
-  // Impact refinement — only when the rough P7 can't be trusted: low overall
-  // confidence, a face-on angle (systematically early), or a non-isolated motion
-  // peak (shadow/background noise). Clean, isolated-peak DTL clips skip it.
-  const p7NeedsRefine =
-    sel.confidence < CONFIDENCE_THRESHOLD ||
-    opts?.cameraAngle === "face-on" ||
-    !sel.peakDominant;
+  // Face-on is the only angle where the math impact is unreliable (max angular
+  // velocity is mid-downswing, not at the ball). DTL trusts the math motion-peak.
+  const p7NeedsRefine = opts?.cameraAngle === "face-on";
   if (opts?.apiKey && p7NeedsRefine) {
     const refined = await refineImpact(videoPath, indices[6] / SCAN_FPS, duration, opts.apiKey, opts.cameraAngle, opts.club);
     // Guard against a bad pick collapsing the swing: the refined impact must sit a
@@ -620,8 +549,20 @@ IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explana
     "problem": "<description>",
     "why_it_matters": "<impact on ball flight>",
     "drill": "<specific drill>"
-  }
+  },
+  "drills": [
+    {
+      "name": "<drill name>",
+      "target_position": "<P#>",
+      "fault_addressed": "<specific fault this drill fixes>",
+      "steps": ["<step 1>", "<step 2>", "<step 3>"],
+      "youtube_search": "<short search query>",
+      "youtube_url": "https://www.youtube.com/results?search_query=<url+encoded+query>"
+    }
+  ]
 }
+
+Provide 3–5 entries in "drills", ordered by priority — target the weakest positions and the priority_fix first. Each drill must be specific and actionable, with a real YouTube search URL (encode spaces as +).
 
 Be specific and honest. Reference what you actually see in the frames.`;
 }
@@ -699,13 +640,17 @@ export async function analyzeSwing(
   });
   contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club, historyContext) });
 
+  const t0 = Date.now();
   const response = await client.messages.create({
     model: "claude-opus-4-8",
-    max_tokens: 4096,
+    max_tokens: 6144,
     messages: [{ role: "user", content: contentBlocks }],
   });
+  console.log(`[timing] analyzeSwing model call: ${Date.now() - t0}ms`);
 
-  return parseModelJson<Analysis>((response.content[0] as { text: string }).text, "swing analysis");
+  const analysis = parseModelJson<Analysis>((response.content[0] as { text: string }).text, "swing analysis");
+  if (!Array.isArray(analysis.drills)) analysis.drills = [];
+  return analysis;
 }
 
 export async function generateDrills(
@@ -774,13 +719,7 @@ export async function runAnalysis(
   if (frames.length === 0) throw new Error("No frames extracted from video.");
 
   const analysis = await analyzeSwing(frames, cameraAngle, club, apiKey);
-
-  let drills: Drill[] = [];
-  try {
-    drills = await generateDrills(analysis, club, apiKey);
-  } catch {
-    // drills are non-critical
-  }
+  const drills: Drill[] = analysis.drills ?? [];
 
   const swingFrames: string[] = [];
   for (let n = 1; n <= 10; n++) {

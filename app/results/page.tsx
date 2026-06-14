@@ -6,6 +6,7 @@ import { SwingResult, Grade } from "@/types";
 import GradeBadge from "@/components/Gradebadge";
 import PositionCard from "@/components/PositionCard";
 import DrillCard from "@/components/DrillCard";
+import Link from "next/link";
 
 const GRADE_ORDER: Record<Grade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
 
@@ -49,7 +50,7 @@ export default function ResultsPage() {
 
   if (!result) return null;
 
-  const { analysis, drills, meta, frames } = result;
+  const { analysis, drills, meta, frames, analysisId } = result;
   const positions = Object.entries(analysis.positions);
   const avgGrade = positions.reduce((sum, [, d]) => sum + GRADE_ORDER[d.grade], 0) / positions.length;
   const overallGrade: Grade = avgGrade >= 3.5 ? "A" : avgGrade >= 2.5 ? "B" : avgGrade >= 1.5 ? "C" : avgGrade >= 0.5 ? "D" : "F";
@@ -73,10 +74,23 @@ export default function ResultsPage() {
             </svg>
             New Analysis
           </button>
-          <div className="flex items-center gap-2 text-xs text-white/30">
-            <span>{clubLabel[meta.club]}</span>
-            <span>·</span>
-            <span>{meta.camera_angle.toUpperCase()}</span>
+          <div className="flex items-center gap-3">
+            {analysisId && (
+              <Link
+                href="/history"
+                className="flex items-center gap-1.5 text-xs text-green-400 hover:text-green-300 transition-colors"
+              >
+                <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                </svg>
+                Saved to history
+              </Link>
+            )}
+            <div className="flex items-center gap-2 text-xs text-white/30">
+              <span>{clubLabel[meta.club]}</span>
+              <span>·</span>
+              <span>{meta.camera_angle.toUpperCase()}</span>
+            </div>
           </div>
         </div>
 

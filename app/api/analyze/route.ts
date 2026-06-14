@@ -3,7 +3,7 @@ import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 import { randomUUID } from "crypto";
-import { extractFrames, analyzeSwing, generateDrills, buildHistoryContext } from "@/lib/analyze";
+import { extractFrames, analyzeSwing, buildHistoryContext } from "@/lib/analyze";
 import { CameraAngle, Club, Drill } from "@/types";
 import { createServerClient } from "@supabase/ssr";
 import { cookies } from "next/headers";
@@ -161,14 +161,16 @@ export async function POST(req: NextRequest) {
       const send = (data: object) => controller.enqueue(sseEvent(data));
 
       try {
-        // Phase 1: extract frames (escalates to AI-mapping on low-confidence picks)
+        // Phase 1: extract frames (math selection + visual impact refine)
         send({ type: "status", step: 1, message: "Extracting frames..." });
+        const tExtract = Date.now();
         const framePaths = await extractFrames(videoPath, framesDir, {
           apiKey,
           cameraAngle,
           club,
           onProgress: (message) => send({ type: "status", step: 1, message }),
         });
+        console.log(`[timing] extractFrames total: ${Date.now() - tExtract}ms`);
 
         const swingFrames: string[] = [];
         for (let n = 1; n <= 10; n++) {
@@ -177,18 +179,15 @@ export async function POST(req: NextRequest) {
         }
         send({ type: "frames", frames: swingFrames });
 
-        // Phase 2: analyze (with history context for logged-in users)
+        // Phase 2: analyze + drills in a SINGLE model call (no separate round-trip)
         send({ type: "status", step: 2, message: "Analyzing your swing..." });
+        const tAnalyze = Date.now();
         const analysis = await analyzeSwing(framePaths, cameraAngle, club, apiKey, historyContext ?? undefined);
+        console.log(`[timing] analyzeSwing total: ${Date.now() - tAnalyze}ms`);
 
-        // Phase 3: drills
+        // Drills now come back with the analysis (folded into the same call).
         send({ type: "status", step: 3, message: "Generating drills..." });
-        let drills: Drill[] = [];
-        try {
-          drills = await generateDrills(analysis, club, apiKey);
-        } catch {
-          // drills are non-critical
-        }
+        const drills: Drill[] = analysis.drills ?? [];
 
         // Save to Supabase if user is logged in
         let analysisId: string | null = null;
