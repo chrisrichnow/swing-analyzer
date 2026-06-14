@@ -17,12 +17,24 @@ const MAX_DURATION_SEC = 30;
 const CONFIDENCE_THRESHOLD = 0.6;
 // How many evenly-spaced frames to hand the model in the AI-mapping fallback.
 const AI_CANDIDATE_COUNT = 24;
+// Impact refinement: the pixel-diff motion peak is an unreliable impact locator
+// (post-impact blur biases it late on DTL irons; the fast downswing sweep biases
+// it early on face-on; background/shadow motion throws it off entirely). When the
+// rough P7 can't be trusted we extract a dense full-fps strip around it and let a
+// cheap model pick the exact ball-strike frame. Window is seconds each side.
+const IMPACT_REFINE_BEFORE = 0.18;
+const IMPACT_REFINE_AFTER = 0.18;
+const IMPACT_REFINE_MODEL = "claude-sonnet-4-6";
+// Reject a refined P7 that lands implausibly close to P4 (would collapse the
+// downswing frames) — a real downswing is at least this long.
+const MIN_DOWNSWING_SEC = 0.12;
 
 interface FrameSelection {
   indices: number[];      // 10 scan-fps frame indices, in swing order
   confidence: number;     // 0..1 — how much the math selector trusts this pick
   segStartSec: number;    // clean-segment bounds (seconds) for the AI fallback
   segEndSec: number;
+  peakDominant: boolean;  // was the impact motion peak sharply isolated?
 }
 
 export interface ExtractOpts {
@@ -112,7 +124,7 @@ export function selectSwingFrames(videoPath: string, videoDuration: number): Fra
     Array.from({ length: 10 }, (_, i) => Math.floor(start + (i * (end - start)) / 9));
   // Confidence 0 on any fallback path so the orchestrator escalates to AI-mapping.
   const fallback = (segStartSec: number, segEndSec: number, start: number, end: number): FrameSelection =>
-    ({ indices: evenly(start, end), confidence: 0, segStartSec, segEndSec });
+    ({ indices: evenly(start, end), confidence: 0, segStartSec, segEndSec, peakDominant: false });
   if (frameCount < 30) return fallback(0, videoDuration, 0, frameCount - 1);
 
   // Crop analysis to the longest cut-free segment — kills TikTok overlays / edits.
@@ -280,7 +292,7 @@ export function selectSwingFrames(videoPath: string, videoDuration: number): Fra
   if (durationHealthy) confidence += 0.15;
   if (peakDominant) confidence += 0.10;
 
-  return { indices: positions, confidence, segStartSec, segEndSec };
+  return { indices: positions, confidence, segStartSec, segEndSec, peakDominant };
 }
 
 // Extract N evenly-spaced low-res frames across [startSec, endSec] for the model
@@ -388,19 +400,110 @@ async function aiMapPositions(
   }
 }
 
+// Refine impact (P7) visually: extract a dense strip at full scan-fps around the
+// rough P7 and let a cheap model pick the exact ball-strike frame. Returns the
+// refined scan-fps index, or null if it fails. Robust to lighting/shadow (it sees
+// the club + ball) and precise (full-fps strip), unlike the pixel-diff peak.
+async function refineImpact(
+  videoPath: string,
+  roughP7Sec: number,
+  duration: number,
+  apiKey: string,
+  cameraAngle?: CameraAngle,
+  club?: Club
+): Promise<number | null> {
+  const startSec = Math.max(0, roughP7Sec - IMPACT_REFINE_BEFORE);
+  const endSec = Math.min(duration, roughP7Sec + IMPACT_REFINE_AFTER);
+  const count = Math.max(1, Math.round((endSec - startSec) * SCAN_FPS) + 1);
+  const { dir, frames } = extractCandidateStrip(videoPath, startSec, endSec, count);
+  try {
+    if (frames.length < 3) return null;
+
+    const client = new Anthropic({ apiKey, maxRetries: 3 });
+    const content: Anthropic.MessageParam["content"] = [];
+    frames.forEach((f, i) => {
+      content.push({ type: "text", text: `Frame ${i + 1}:` });
+      content.push({
+        type: "image",
+        source: { type: "base64", media_type: "image/jpeg", data: readFileSync(f.path).toString("base64") },
+      });
+    });
+    const angleLabel = cameraAngle === "dtl" ? "DOWN-THE-LINE" : cameraAngle === "face-on" ? "FACE-ON" : "UNKNOWN";
+    content.push({
+      type: "text",
+      text: `These ${frames.length} frames are consecutive (in time order) around the moment of impact in a golf swing. Camera: ${angleLabel}${club ? `, club ${club.replace("-", " ")}` : ""}.
+
+Identify the single frame at IMPACT — the clubhead exactly at the ball, the instant before the ball leaves. If you see a divot spray or the ball already gone, impact is the frame just before that. Pick the most precise ball-strike frame.
+
+Respond with ONLY valid JSON, no markdown: {"impact": <frame number 1-${frames.length}>}`,
+    });
+
+    const resp = await client.messages.create({
+      model: IMPACT_REFINE_MODEL,
+      max_tokens: 128,
+      messages: [{ role: "user", content }],
+    });
+
+    const parsed = parseModelJson<{ impact: number }>((resp.content[0] as { text: string }).text, "impact refinement");
+    let n = Math.round(Number(parsed.impact));
+    if (!Number.isFinite(n)) return null;
+    n = Math.min(Math.max(n, 1), frames.length);
+    return Math.max(0, Math.round(frames[n - 1].sec * SCAN_FPS));
+  } catch {
+    return null;
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+}
+
+// Moving P7 can invalidate the neighbouring downswing/follow-through frames. Re-space
+// P5/P6 across [P4,P7] and P8/P9 across [P7,P10] by time ratio so ordering stays sane.
+function reanchorAroundP7(indices: number[], newP7: number): number[] {
+  const [p1, , , p4, , , , , , p10] = indices;
+  const p7 = Math.min(Math.max(newP7, p4 + 1), p10 - 1);
+  const p5 = p4 + Math.round((p7 - p4) * 0.45);
+  const p6 = p4 + Math.round((p7 - p4) * 0.75);
+  const p8 = p7 + Math.round((p10 - p7) * 0.25);
+  const p9 = p7 + Math.round((p10 - p7) * 0.60);
+  return [p1, indices[1], indices[2], p4, p5, p6, p7, p8, p9, p10];
+}
+
 // Orchestrator: trust the fast math pick when it's confident, otherwise let the
-// model read the frames. Pure-math when no apiKey is supplied.
+// model read the frames. Then refine impact (P7) when the rough pick can't be
+// trusted. Pure-math when no apiKey is supplied.
 export async function selectSwingFramesSmart(
   videoPath: string,
   duration: number,
   opts?: ExtractOpts
 ): Promise<number[]> {
   const sel = selectSwingFrames(videoPath, duration);
-  if (!opts?.apiKey || sel.confidence >= CONFIDENCE_THRESHOLD) return sel.indices;
 
-  opts.onProgress?.("Double-checking frame selection with AI...");
-  const ai = await aiMapPositions(videoPath, sel.segStartSec, sel.segEndSec, opts.apiKey, opts.cameraAngle, opts.club);
-  return ai ?? sel.indices;
+  let indices = sel.indices;
+  if (opts?.apiKey && sel.confidence < CONFIDENCE_THRESHOLD) {
+    opts.onProgress?.("Double-checking frame selection with AI...");
+    const ai = await aiMapPositions(videoPath, sel.segStartSec, sel.segEndSec, opts.apiKey, opts.cameraAngle, opts.club);
+    if (ai) indices = ai;
+  }
+
+  // Impact refinement — only when the rough P7 can't be trusted: low overall
+  // confidence, a face-on angle (systematically early), or a non-isolated motion
+  // peak (shadow/background noise). Clean, isolated-peak DTL clips skip it.
+  const p7NeedsRefine =
+    sel.confidence < CONFIDENCE_THRESHOLD ||
+    opts?.cameraAngle === "face-on" ||
+    !sel.peakDominant;
+  if (opts?.apiKey && p7NeedsRefine) {
+    const refined = await refineImpact(videoPath, indices[6] / SCAN_FPS, duration, opts.apiKey, opts.cameraAngle, opts.club);
+    // Guard against a bad pick collapsing the swing: the refined impact must sit a
+    // plausible downswing past P4 and before P10, else keep the original P7.
+    const minP7 = indices[3] + Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
+    const maxP7 = indices[9] - Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
+    if (refined != null && refined !== indices[6] && refined >= minP7 && refined <= maxP7) {
+      indices = reanchorAroundP7(indices, refined);
+    }
+  }
+
+  return indices;
 }
 
 export async function extractFrames(videoPath: string, outputDir: string, opts?: ExtractOpts): Promise<string[]> {
