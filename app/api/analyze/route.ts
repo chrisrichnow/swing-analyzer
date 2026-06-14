@@ -2,8 +2,11 @@ import { NextRequest } from "next/server";
 import { writeFileSync, mkdirSync, rmSync, readFileSync, existsSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
-import { extractFrames, analyzeSwing, generateDrills } from "@/lib/analyze";
+import { randomUUID } from "crypto";
+import { extractFrames, analyzeSwing, generateDrills, buildHistoryContext } from "@/lib/analyze";
 import { CameraAngle, Club, Drill } from "@/types";
+import { createServerClient } from "@supabase/ssr";
+import { cookies } from "next/headers";
 
 export const maxDuration = 300;
 
@@ -11,6 +14,99 @@ const MAX_VIDEO_BYTES = 100 * 1024 * 1024;
 
 function sseEvent(data: object): Uint8Array {
   return new TextEncoder().encode(`data: ${JSON.stringify(data)}\n\n`);
+}
+
+async function getUserAndHistory(req: NextRequest) {
+  try {
+    const cookieStore = await cookies();
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return cookieStore.getAll(); },
+          setAll(cookiesToSet) {
+            try { cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); } catch { /* noop */ }
+          },
+        },
+      }
+    );
+
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return { user: null, historyContext: null, supabase: null };
+
+    const { data: pastAnalyses } = await supabase
+      .from("analyses")
+      .select("overall_score, overall_grade, positions, priority_fix, club, camera_angle, created_at")
+      .eq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(5);
+
+    const historyContext = pastAnalyses && pastAnalyses.length > 0
+      ? buildHistoryContext(pastAnalyses)
+      : null;
+
+    return { user, historyContext, supabase };
+  } catch {
+    return { user: null, historyContext: null, supabase: null };
+  }
+}
+
+async function saveAnalysis(
+  supabase: ReturnType<typeof createServerClient>,
+  userId: string,
+  analysisId: string,
+  framePaths: string[],
+  cameraAngle: CameraAngle,
+  club: Club,
+  analysis: Awaited<ReturnType<typeof analyzeSwing>>,
+  drills: Drill[]
+): Promise<string[]> {
+  const supabaseAdmin = createServerClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.SUPABASE_SERVICE_ROLE_KEY!,
+    { cookies: { getAll: () => [], setAll: () => {} } }
+  );
+
+  const storagePaths: string[] = [];
+
+  // Upload frames to Supabase Storage
+  for (let i = 0; i < framePaths.length; i++) {
+    const frameNum = String(i + 1).padStart(2, "0");
+    const storagePath = `${userId}/${analysisId}/frame_${frameNum}.jpg`;
+    const buffer = readFileSync(framePaths[i]);
+
+    const { error } = await supabaseAdmin.storage
+      .from("swing-frames")
+      .upload(storagePath, buffer, { contentType: "image/jpeg", upsert: false });
+
+    if (!error) storagePaths.push(storagePath);
+  }
+
+  // Compute overall grade from positions
+  const GRADE_ORDER: Record<string, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
+  const GRADE_LABELS = ["F", "D", "C", "B", "A"];
+  const positionEntries = Object.entries(analysis.positions);
+  const avg = positionEntries.reduce((sum, [, d]) => sum + (GRADE_ORDER[d.grade] ?? 0), 0) / positionEntries.length;
+  const overallGrade = GRADE_LABELS[Math.round(avg)] ?? "C";
+
+  const { error: insertError } = await supabaseAdmin.from("analyses").insert({
+    id: analysisId,
+    user_id: userId,
+    club,
+    camera_angle: cameraAngle,
+    overall_score: analysis.overall_score,
+    overall_grade: overallGrade,
+    summary: analysis.summary,
+    positions: analysis.positions,
+    priority_fix: analysis.priority_fix,
+    drills,
+    frame_paths: storagePaths,
+  });
+
+  if (insertError) console.error("Failed to save analysis:", insertError.message);
+
+  return storagePaths;
 }
 
 export async function POST(req: NextRequest) {
@@ -49,6 +145,8 @@ export async function POST(req: NextRequest) {
     );
   }
 
+  const { user, historyContext, supabase } = await getUserAndHistory(req);
+
   const sessionId = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
   const sessionDir = join(tmpdir(), `swing_${sessionId}`);
   const framesDir = join(sessionDir, "frames");
@@ -63,9 +161,14 @@ export async function POST(req: NextRequest) {
       const send = (data: object) => controller.enqueue(sseEvent(data));
 
       try {
-        // Phase 1: extract frames
+        // Phase 1: extract frames (escalates to AI-mapping on low-confidence picks)
         send({ type: "status", step: 1, message: "Extracting frames..." });
-        const framePaths = extractFrames(videoPath, framesDir);
+        const framePaths = await extractFrames(videoPath, framesDir, {
+          apiKey,
+          cameraAngle,
+          club,
+          onProgress: (message) => send({ type: "status", step: 1, message }),
+        });
 
         const swingFrames: string[] = [];
         for (let n = 1; n <= 10; n++) {
@@ -74,9 +177,9 @@ export async function POST(req: NextRequest) {
         }
         send({ type: "frames", frames: swingFrames });
 
-        // Phase 2: analyze
+        // Phase 2: analyze (with history context for logged-in users)
         send({ type: "status", step: 2, message: "Analyzing your swing..." });
-        const analysis = await analyzeSwing(framePaths, cameraAngle, club, apiKey);
+        const analysis = await analyzeSwing(framePaths, cameraAngle, club, apiKey, historyContext ?? undefined);
 
         // Phase 3: drills
         send({ type: "status", step: 3, message: "Generating drills..." });
@@ -85,6 +188,13 @@ export async function POST(req: NextRequest) {
           drills = await generateDrills(analysis, club, apiKey);
         } catch {
           // drills are non-critical
+        }
+
+        // Save to Supabase if user is logged in
+        let analysisId: string | null = null;
+        if (user && supabase) {
+          analysisId = randomUUID();
+          await saveAnalysis(supabase, user.id, analysisId, framePaths, cameraAngle, club, analysis, drills);
         }
 
         send({
@@ -99,6 +209,7 @@ export async function POST(req: NextRequest) {
             analysis,
             drills,
             frames: swingFrames,
+            analysisId,
           },
         });
       } catch (err) {

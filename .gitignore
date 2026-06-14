@@ -9,3 +9,5 @@ out/
 next-env.d.ts
 tmp_frames/
 .playwright-cli/
+test-videos/
+test-results/

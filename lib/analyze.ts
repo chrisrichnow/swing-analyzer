@@ -12,6 +12,26 @@ const SCAN_FPS = 60;
 const FRAME_SIZE = 160 * 90;
 const MAX_DURATION_SEC = 30;
 
+// When the math-based frame selector trusts its own pick less than this, we
+// escalate to the AI-mapping fallback (let the model read the actual frames).
+const CONFIDENCE_THRESHOLD = 0.6;
+// How many evenly-spaced frames to hand the model in the AI-mapping fallback.
+const AI_CANDIDATE_COUNT = 24;
+
+interface FrameSelection {
+  indices: number[];      // 10 scan-fps frame indices, in swing order
+  confidence: number;     // 0..1 — how much the math selector trusts this pick
+  segStartSec: number;    // clean-segment bounds (seconds) for the AI fallback
+  segEndSec: number;
+}
+
+export interface ExtractOpts {
+  apiKey?: string;        // omit to force pure-math selection (no AI fallback)
+  cameraAngle?: CameraAngle;
+  club?: Club;
+  onProgress?: (message: string) => void;
+}
+
 export function probeDurationSec(videoPath: string): number {
   const out = execSync(
     `"${FFPROBE}" -v error -select_streams v:0 -show_entries stream=duration -of csv=p=0 "${videoPath}"`,
@@ -81,7 +101,7 @@ function frameAtRatio(start: number, cum: number[], ratio: number): number {
   return start + cum.length - 1;
 }
 
-function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
+export function selectSwingFrames(videoPath: string, videoDuration: number): FrameSelection {
   const rawFrames = execSync(
     `"${FFMPEG}" -i "${videoPath}" -vf "fps=${SCAN_FPS},scale=160:90,format=gray" -f rawvideo pipe:1 -loglevel error`,
     { maxBuffer: 200 * 1024 * 1024 }
@@ -90,8 +110,10 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const frameCount = Math.floor(rawFrames.length / FRAME_SIZE);
   const evenly = (start: number, end: number) =>
     Array.from({ length: 10 }, (_, i) => Math.floor(start + (i * (end - start)) / 9));
-  const fallback = evenly(0, frameCount - 1);
-  if (frameCount < 30) return fallback;
+  // Confidence 0 on any fallback path so the orchestrator escalates to AI-mapping.
+  const fallback = (segStartSec: number, segEndSec: number, start: number, end: number): FrameSelection =>
+    ({ indices: evenly(start, end), confidence: 0, segStartSec, segEndSec });
+  if (frameCount < 30) return fallback(0, videoDuration, 0, frameCount - 1);
 
   // Crop analysis to the longest cut-free segment — kills TikTok overlays / edits.
   // Pad inward by 0.2s on each side so cut transitions don't bleed into the diff signal.
@@ -100,7 +122,7 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const padFrames = Math.floor(SCAN_FPS * 0.2);
   const segStart = Math.max(0, Math.floor(segStartSec * SCAN_FPS) + padFrames);
   const segEnd = Math.min(frameCount - 1, Math.floor(segEndSec * SCAN_FPS) - padFrames);
-  if (segEnd - segStart < 30) return fallback;
+  if (segEnd - segStart < 30) return fallback(segStartSec, segEndSec, 0, frameCount - 1);
 
   // Compute raw diffs then smooth
   const raw: number[] = new Array(frameCount).fill(0);
@@ -119,7 +141,7 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const outlierClip = percentile(segmentDiffs, 0.99) * 2;
   const s = sRaw.map((v, i) => (i < segStart || i > segEnd) ? 0 : Math.min(v, outlierClip));
   const maxDiff = Math.max(...s.slice(segStart, segEnd + 1));
-  if (maxDiff === 0) return evenly(segStart, segEnd);
+  if (maxDiff === 0) return fallback(segStartSec, segEndSec, segStart, segEnd);
 
   // P7 — last peak above 80% of capped max within the clean segment
   let p7 = segStart;
@@ -149,11 +171,13 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const p4SearchStart = Math.max(segStart, p7 - Math.floor(SCAN_FPS * 0.55));
   const downswingThreshold = maxDiff * 0.30;
   let p4 = -1;
+  let p4Found = true;
   for (let i = p4SearchEnd; i >= p4SearchStart; i--) {
     if (s[i] < downswingThreshold) { p4 = i; break; }
   }
   if (p4 === -1) {
-    // No quiet frame found — fall back to local minimum
+    // No quiet transition frame found — fall back to local minimum (lower confidence)
+    p4Found = false;
     p4 = p4SearchStart;
     let p4Min = Infinity;
     for (let i = p4SearchStart; i <= p4SearchEnd; i++) {
@@ -161,8 +185,13 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     }
   }
 
-  // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames)
-  let p1 = 0;
+  // P1 — last quiet frame before P4 (motion < 5% of max, sustained 5+ frames).
+  // If the player never holds a still address (walk-up, no pause), there is no
+  // quiet stretch to find. Rather than defaulting to frame 0 (which produces a
+  // bogus multi-second "swing"), anchor P1 geometrically: a backswing runs
+  // ~0.8s, so place P1 that far before P4. Impact-anchored, no stillness needed.
+  let p1 = -1;
+  let p1Found = true;
   const addressQuietFrames = 5;
   for (let i = p4 - addressQuietFrames; i >= addressQuietFrames; i--) {
     let quiet = true;
@@ -171,17 +200,29 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
     }
     if (quiet) { p1 = i + addressQuietFrames; break; }
   }
+  if (p1 < 0) {
+    p1Found = false;
+    p1 = Math.max(segStart, p4 - Math.round(SCAN_FPS * 0.8));
+  }
 
   // P10 — first quiet frame after P7 (motion < 8% of max, sustained 0.3s = 18 frames),
-  // bounded by the clean segment so we never walk into a scene cut / TikTok screen
+  // bounded by the clean segment so we never walk into a scene cut / TikTok screen.
+  // If the player never holds a still finish (cuts the clip early, no pose), there
+  // is no quiet stretch — anchor P10 geometrically ~0.5s past impact instead of the
+  // old 2.5s default (which stretched the "swing" far past the real finish).
   const finishQuietFrames = Math.floor(SCAN_FPS * 0.3);
-  let p10 = Math.min(segEnd, p7 + Math.floor(SCAN_FPS * 2.5));
+  let p10 = -1;
+  let p10Found = true;
   for (let i = p7 + 1; i < segEnd - finishQuietFrames; i++) {
     let quiet = true;
     for (let j = i; j < i + finishQuietFrames; j++) {
       if (s[j] >= maxDiff * 0.08) { quiet = false; break; }
     }
     if (quiet) { p10 = i + Math.floor(finishQuietFrames / 2); break; }
+  }
+  if (p10 < 0) {
+    p10Found = false;
+    p10 = Math.min(segEnd, p7 + Math.round(SCAN_FPS * 0.5));
   }
 
   // Find the actual takeaway start — first frame after P1 where motion stays
@@ -215,20 +256,154 @@ function selectSwingFrames(videoPath: string, videoDuration: number): number[] {
   const p8 = frameAtRatio(p7, ftCum, 0.25);
   const p9 = frameAtRatio(p7, ftCum, 0.60);
 
-  // Sanity check — a real swing is roughly 1.0–4.5s end-to-end. If our picks collapse
-  // (all the same frame, or duration outside that range), fall back to evenly-spaced
-  // frames within the clean segment instead of returning garbage.
+  // Sanity check — a real swing is roughly 1.0–5.0s end-to-end. If our picks collapse
+  // (all the same frame, or duration outside that range), bail to evenly-spaced frames
+  // at confidence 0 so the orchestrator hands it to the AI-mapping fallback.
   const swingDurationSec = (p10 - p1) / SCAN_FPS;
   const positions = [p1, p2, p3, p4, p5, p6, p7, p8, p9, p10];
   const uniqueFrames = new Set(positions).size;
   if (swingDurationSec < 1.0 || swingDurationSec > 5.0 || uniqueFrames < 8) {
-    return evenly(segStart, segEnd);
+    return fallback(segStartSec, segEndSec, segStart, segEnd);
   }
 
-  return positions;
+  // Confidence — how much we trust this pick. The two swing boundaries (a real
+  // still address and a real still finish) are the strongest signals; a clean
+  // transition at P4, a healthy total duration, and a sharply dominant impact
+  // peak round it out. Below CONFIDENCE_THRESHOLD we let the AI read the frames.
+  const p90 = percentile(segmentDiffs, 0.90);
+  const peakDominant = maxDiff / (p90 + 1e-6) > 2.5;
+  const durationHealthy = swingDurationSec >= 1.2 && swingDurationSec <= 2.6;
+  let confidence = 0;
+  if (p1Found) confidence += 0.30;
+  if (p10Found) confidence += 0.25;
+  if (p4Found) confidence += 0.20;
+  if (durationHealthy) confidence += 0.15;
+  if (peakDominant) confidence += 0.10;
+
+  return { indices: positions, confidence, segStartSec, segEndSec };
 }
 
-export function extractFrames(videoPath: string, outputDir: string): string[] {
+// Extract N evenly-spaced low-res frames across [startSec, endSec] for the model
+// to read in the AI-mapping fallback. Returns each frame's path + source timestamp.
+function extractCandidateStrip(
+  videoPath: string,
+  startSec: number,
+  endSec: number,
+  count: number
+): { dir: string; frames: { path: string; sec: number }[] } {
+  const dir = `${videoPath}_cand`;
+  if (existsSync(dir)) rmSync(dir, { recursive: true });
+  mkdirSync(dir, { recursive: true });
+
+  const span = Math.max(0.001, endSec - startSec);
+  const frames: { path: string; sec: number }[] = [];
+  for (let i = 0; i < count; i++) {
+    const sec = startSec + (span * i) / (count - 1);
+    const p = join(dir, `cand_${String(i + 1).padStart(2, "0")}.jpg`);
+    execSync(
+      `"${FFMPEG}" -ss ${sec.toFixed(4)} -i "${videoPath}" -vframes 1 -vf "scale=360:-2" -q:v 5 "${p}" -y -loglevel error`
+    );
+    if (existsSync(p)) frames.push({ path: p, sec });
+  }
+  return { dir, frames };
+}
+
+function buildMappingPrompt(n: number, cameraAngle?: CameraAngle, club?: Club): string {
+  const angleLabel = cameraAngle === "dtl" ? "DOWN-THE-LINE" : cameraAngle === "face-on" ? "FACE-ON" : "UNKNOWN";
+  return `You are a golf biomechanics expert. Below are ${n} still frames sampled in time order from a SINGLE golf swing (Frame 1 is earliest, Frame ${n} is latest). The clip may include footage before and after the actual swing — setup, waggle, walk-up, or the player watching the shot.
+
+Identify which frame number best matches each of the 10 swing positions. The positions always occur in strict time order: P1 < P2 < P3 < P4 < P5 < P6 < P7 < P8 < P9 < P10.
+
+Camera angle: ${angleLabel}${club ? `. Club: ${club.replace("-", " ").toUpperCase()}` : ""}.
+
+- P1 Address: static setup over the ball, before any motion starts.
+- P2 Takeaway: club shaft parallel to the ground at hip height, early backswing.
+- P3 Lead arm parallel to the ground, backswing.
+- P4 Top of backswing: hands highest, club fully back, the instant motion reverses.
+- P5 Lead arm parallel to the ground, downswing (mirror of P3).
+- P6 Club shaft parallel to the ground, downswing, just before impact.
+- P7 Impact: club meets the ball — usually the fastest, most motion-blurred frame.
+- P8 Club shaft parallel to the ground, follow-through, just after impact.
+- P9 Trail arm parallel to the ground, follow-through.
+- P10 Finish: balanced final pose, motion stopped.
+
+Respond with ONLY valid JSON, no markdown, no explanation:
+{"P1":<n>,"P2":<n>,"P3":<n>,"P4":<n>,"P5":<n>,"P6":<n>,"P7":<n>,"P8":<n>,"P9":<n>,"P10":<n>}`;
+}
+
+// AI-mapping fallback: hand the model a strip of frames and let it identify which
+// frame is each position. Returns 10 scan-fps frame indices, or null if it fails
+// (so the caller can fall back to the best-effort math pick).
+async function aiMapPositions(
+  videoPath: string,
+  startSec: number,
+  endSec: number,
+  apiKey: string,
+  cameraAngle?: CameraAngle,
+  club?: Club
+): Promise<number[] | null> {
+  const { dir, frames } = extractCandidateStrip(videoPath, startSec, endSec, AI_CANDIDATE_COUNT);
+  try {
+    if (frames.length < 10) return null;
+
+    const client = new Anthropic({ apiKey, maxRetries: 3 });
+    const content: Anthropic.MessageParam["content"] = [];
+    frames.forEach((f, i) => {
+      content.push({ type: "text", text: `Frame ${i + 1}:` });
+      content.push({
+        type: "image",
+        source: { type: "base64", media_type: "image/jpeg", data: readFileSync(f.path).toString("base64") },
+      });
+    });
+    content.push({ type: "text", text: buildMappingPrompt(frames.length, cameraAngle, club) });
+
+    const resp = await client.messages.create({
+      model: "claude-sonnet-4-6",
+      max_tokens: 512,
+      messages: [{ role: "user", content }],
+    });
+
+    const map = parseModelJson<Record<string, number>>((resp.content[0] as { text: string }).text, "frame mapping");
+
+    // Read picks in swing order, clamping into range and forcing strictly
+    // increasing — the model can't reorder time, so a non-monotonic answer is noise.
+    const order = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"];
+    const picks: number[] = [];
+    let prev = 0;
+    for (const pos of order) {
+      let n = Math.round(Number(map[pos]));
+      if (!Number.isFinite(n)) return null;
+      n = Math.min(Math.max(n, 1), frames.length);
+      if (n <= prev) n = Math.min(prev + 1, frames.length);
+      prev = n;
+      picks.push(n);
+    }
+
+    // Candidate frame number -> scan-fps index via its source timestamp.
+    return picks.map((n) => Math.max(0, Math.round(frames[n - 1].sec * SCAN_FPS)));
+  } catch {
+    return null;
+  } finally {
+    try { rmSync(dir, { recursive: true, force: true }); } catch { /* best-effort */ }
+  }
+}
+
+// Orchestrator: trust the fast math pick when it's confident, otherwise let the
+// model read the frames. Pure-math when no apiKey is supplied.
+export async function selectSwingFramesSmart(
+  videoPath: string,
+  duration: number,
+  opts?: ExtractOpts
+): Promise<number[]> {
+  const sel = selectSwingFrames(videoPath, duration);
+  if (!opts?.apiKey || sel.confidence >= CONFIDENCE_THRESHOLD) return sel.indices;
+
+  opts.onProgress?.("Double-checking frame selection with AI...");
+  const ai = await aiMapPositions(videoPath, sel.segStartSec, sel.segEndSec, opts.apiKey, opts.cameraAngle, opts.club);
+  return ai ?? sel.indices;
+}
+
+export async function extractFrames(videoPath: string, outputDir: string, opts?: ExtractOpts): Promise<string[]> {
   if (existsSync(outputDir)) rmSync(outputDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
 
@@ -237,7 +412,7 @@ export function extractFrames(videoPath: string, outputDir: string): string[] {
     throw new Error(`Video too long: ${duration.toFixed(1)}s. Max ${MAX_DURATION_SEC}s — please trim and try again.`);
   }
 
-  const frameIndices = selectSwingFrames(videoPath, duration);
+  const frameIndices = await selectSwingFramesSmart(videoPath, duration, opts);
 
   const frames: string[] = [];
   for (let i = 0; i < frameIndices.length; i++) {
@@ -256,7 +431,7 @@ export function extractFrames(videoPath: string, outputDir: string): string[] {
   return frames;
 }
 
-function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
+function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club, historyContext?: string): string {
   const angleLabel = cameraAngle === "dtl" ? "down-the-line" : "face-on";
 
   const clubContext: Record<Club, string> = {
@@ -271,6 +446,10 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club): string {
     dtl: `Camera: DOWN-THE-LINE. Focus on: swing plane, club path and face angle, shaft angles, arm plane, hip/shoulder rotation, over-the-top or inside-out tendencies.`,
     "face-on": `Camera: FACE-ON. Focus on: weight transfer, spine tilt, hip slide vs turn, head position, knee flex, balance, shoulder plane.`,
   };
+
+  const historySection = historyContext
+    ? `\n## PLAYER HISTORY\n${historyContext}\n\nIf history is available, note whether patterns you observe in this swing are recurring (mention specific positions and whether you see improvement or regression). Reference this in the summary field only — do not change the P1-P10 grading criteria.\n`
+    : "";
 
   return `You are an expert PGA-level golf instructor analyzing a golf swing. You have exactly 10 frames, evenly extracted across the full swing window — one per position. The mapping is fixed:
 
@@ -293,7 +472,7 @@ CONTEXT:
 - ${clubContext[club]}
 
 ${angleContext[cameraAngle]}
-
+${historySection}
 POSITION IDENTIFICATION GUIDE — use these visual cues to identify which frame best matches each position:
 
 P1 — ADDRESS: Golfer static at setup. Right knee flexed more than left. Spine neutral, head angled down toward ball. Both arms hanging, left arm straight. No movement yet.
@@ -371,11 +550,33 @@ function parseModelJson<T>(text: string, label: string): T {
 
 const GRADE_ORDER: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
 
+export function buildHistoryContext(
+  pastAnalyses: Array<{
+    overall_score: number;
+    overall_grade: string;
+    positions: Record<string, { grade: string }>;
+    priority_fix: { position: string; problem: string };
+    club: string;
+    camera_angle: string;
+    created_at: string;
+  }>
+): string {
+  const lines = pastAnalyses.map((a) => {
+    const date = new Date(a.created_at).toISOString().slice(0, 10);
+    const grades = Object.entries(a.positions)
+      .map(([pos, d]) => `${pos}:${d.grade}`)
+      .join(" ");
+    return `- [${date}] ${a.club} ${a.camera_angle.toUpperCase()} | Score: ${a.overall_score} | Priority: ${a.priority_fix.position} ${a.priority_fix.problem.slice(0, 60)}\n  Position grades: ${grades}`;
+  });
+  return `PLAYER HISTORY (last ${pastAnalyses.length} session${pastAnalyses.length !== 1 ? "s" : ""}, most recent first):\n${lines.join("\n")}`;
+}
+
 export async function analyzeSwing(
   framePaths: string[],
   cameraAngle: CameraAngle,
   club: Club,
-  apiKey: string
+  apiKey: string,
+  historyContext?: string
 ): Promise<Analysis> {
   const client = new Anthropic({ apiKey, maxRetries: 4 });
 
@@ -393,10 +594,10 @@ export async function analyzeSwing(
     contentBlocks.push({ type: "text", text: `Frame ${i + 1}/${framePaths.length}:` });
     contentBlocks.push(block);
   });
-  contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club) });
+  contentBlocks.push({ type: "text", text: buildAnalysisPrompt(cameraAngle, club, historyContext) });
 
   const response = await client.messages.create({
-    model: "claude-opus-4-7",
+    model: "claude-opus-4-8",
     max_tokens: 4096,
     messages: [{ role: "user", content: contentBlocks }],
   });
@@ -466,7 +667,7 @@ export async function runAnalysis(
   club: Club,
   apiKey: string
 ) {
-  const frames = extractFrames(videoPath, framesDir);
+  const frames = await extractFrames(videoPath, framesDir, { apiKey, cameraAngle, club });
   if (frames.length === 0) throw new Error("No frames extracted from video.");
 
   const analysis = await analyzeSwing(frames, cameraAngle, club, apiKey);
