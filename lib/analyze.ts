@@ -251,16 +251,30 @@ export function selectSwingFrames(videoPath: string, videoDuration: number): Fra
     p10 = Math.min(segEnd, p7 + Math.round(SCAN_FPS * 0.5));
   }
 
-  // Find the actual takeaway start — first frame after P1 where motion stays
-  // above 30% of the BACKSWING peak motion (not impact peak) for a sustained
-  // 0.1s. Threshold is normalized against backswing peak so it filters out
-  // pre-swing waggle (which can be 25-35% of impact peak) but still triggers
-  // on real takeaway motion. On videos without a waggle, this falls back to
-  // takeawayStart ≈ P1 since real motion starts immediately.
-  const bsPeak = Math.max(...s.slice(p1, p4 + 1));
+  // Find the actual takeaway start. The old approach scanned FORWARD from P1 for
+  // sustained motion, which breaks on a long pre-shot routine/waggle (e.g. Tiger
+  // standing over the ball ~2s): it fails to lock on and falls back to P1, which
+  // then smears P2/P3 across the dead setup so they land on the address frame.
+  //
+  // Instead, anchor on P4 (reliable) and scan BACKWARD to the last "settled" point
+  // before the top — the pause right before the club starts back. The threshold is
+  // measured against the backswing peak in the ~1s before P4 (not the whole P1->P4
+  // span, which a waggle spike could inflate), so a waggle reads as quiet and the
+  // takeaway is found where the real backswing motion begins.
+  // Takeaway start = first frame where motion sustains above 30% of the backswing
+  // peak for 0.1s. Two robustness details matter:
+  //  - Measure the backswing peak only in the ~1.2s before P4, not the whole P1->P4
+  //    span. A long pre-shot routine/waggle (e.g. Tiger over the ball ~2s) can spike
+  //    the full-span max and push the 30% bar so high the real backswing never meets
+  //    it — which silently dumped P2/P3 back onto the address frame.
+  //  - Start the scan at that window, so the same waggle is skipped entirely.
+  // The 30% bar (vs a low floor) also means a noisy night-time address won't false-
+  // trigger. Falls back to P1 only if nothing qualifies.
+  const bsWindowStart = Math.max(p1, p4 - Math.round(SCAN_FPS * 1.2));
+  const bsPeak = Math.max(...s.slice(bsWindowStart, p4 + 1));
   const sustainedFrames = Math.floor(SCAN_FPS * 0.1);
   let takeawayStart = p1;
-  for (let i = p1; i < p4 - sustainedFrames; i++) {
+  for (let i = bsWindowStart; i < p4 - sustainedFrames; i++) {
     let sustained = true;
     for (let j = i; j < i + sustainedFrames; j++) {
       if (s[j] < bsPeak * 0.30) { sustained = false; break; }
@@ -327,7 +341,7 @@ function extractCandidateStrip(
     const sec = startSec + (span * i) / (count - 1);
     const p = join(dir, `cand_${String(i + 1).padStart(2, "0")}.jpg`);
     execSync(
-      `"${FFMPEG}" -ss ${sec.toFixed(4)} -i "${videoPath}" -vframes 1 -vf "scale=360:-2" -q:v 5 "${p}" -y -loglevel error`
+      `"${FFMPEG}" -ss ${sec.toFixed(4)} -i "${videoPath}" -vframes 1 -vf "scale=512:-2" -q:v 3 "${p}" -y -loglevel error`
     );
     if (existsSync(p)) frames.push({ path: p, sec });
   }
@@ -418,16 +432,23 @@ export async function selectSwingFramesSmart(
   const sel = selectSwingFrames(videoPath, duration);
   let indices = sel.indices;
 
-  // Face-on is the only angle where the math impact is unreliable (max angular
-  // velocity is mid-downswing, not at the ball). DTL trusts the math motion-peak.
-  const p7NeedsRefine = opts?.cameraAngle === "face-on";
+  // The pixel-diff motion peak is an unreliable impact locator on BOTH angles: on
+  // face-on it fires mid-downswing, and on DTL the club's fast mid-downswing sweep
+  // (or a moving body-shadow) can outweigh the ball-strike frame. So always lock P7
+  // visually when we have an API key — the model reads the club-vs-ball directly.
+  const p7NeedsRefine = true;
   if (opts?.apiKey && p7NeedsRefine) {
     const refined = await refineImpact(videoPath, indices[6] / SCAN_FPS, duration, opts.apiKey, opts.cameraAngle, opts.club);
-    // Guard against a bad pick collapsing the swing: the refined impact must sit a
-    // plausible downswing past P4 and before P10, else keep the original P7.
+    // The refine may only push P7 LATER, never earlier. The math motion-peak (after
+    // its -2 frame shift) lands at/just-after the ball on clean clips, so an earlier
+    // refine pick there is the model mis-locating impact (it tends to pick the club
+    // approaching, pre-strike). But when the math peak is a FALSE early peak — the
+    // club's mid-downswing sweep on DTL, or the systematic early bias on face-on —
+    // the real impact is later, and the refine correctly pushes it there. Capping at
+    // "later only" gets both: clean clips keep their good math, early clips get fixed.
     const minP7 = indices[3] + Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
     const maxP7 = indices[9] - Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
-    if (refined != null && refined !== indices[6] && refined >= minP7 && refined <= maxP7) {
+    if (refined != null && refined > indices[6] && refined >= minP7 && refined <= maxP7) {
       indices = reanchorAroundP7(indices, refined);
     }
   }
@@ -445,10 +466,11 @@ export async function extractFrames(videoPath: string, outputDir: string, opts?:
   }
 
   const frameIndices = await selectSwingFramesSmart(videoPath, duration, opts);
+  const frameSeconds = frameIndices.map((i) => i / SCAN_FPS);
 
   const frames: string[] = [];
-  for (let i = 0; i < frameIndices.length; i++) {
-    const ts = (frameIndices[i] / SCAN_FPS).toFixed(4);
+  for (let i = 0; i < frameSeconds.length; i++) {
+    const ts = frameSeconds[i].toFixed(4);
     const framePath = join(outputDir, `frame_${String(i + 1).padStart(3, "0")}.jpg`);
     execSync(
       `"${FFMPEG}" -ss ${ts} -i "${videoPath}" -vframes 1 -vf "scale=640:-2" -q:v 4 "${framePath}" -y -loglevel error`
