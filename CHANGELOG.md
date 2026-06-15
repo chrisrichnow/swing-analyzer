@@ -2,6 +2,12 @@
 
 _Auto-updated on every push to master. Newest first._
 
+## 2026-06-14
+- Fix swing-position selection accuracy and speed up analysis
+- Add PROGRESSION.md auto-log and fix local Supabase crash
+- Add visual impact (P7) refinement for unreliable motion-peak picks
+- Make frame selection robust to uncut, real-world swing videos
+
 ## 2026-05-11
 - Upgrade to Opus 4.7, stream SSE progress events
 
