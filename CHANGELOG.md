@@ -3,6 +3,7 @@
 _Auto-updated on every push to master. Newest first._
 
 ## 2026-06-14
+- Add pose-estimation frame selection (experimental, flag-gated)
 - Make impact (P7) and takeaway selection robust to real-world swings
 - Fix swing-position selection accuracy and speed up analysis
 - Add PROGRESSION.md auto-log and fix local Supabase crash
