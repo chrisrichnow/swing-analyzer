@@ -31,6 +31,9 @@ const IMPACT_REFINE_WINDOW: Record<CameraAngle, { before: number; after: number 
   dtl: { before: 0.20, after: 0.18 },
   "face-on": { before: 0.12, after: 0.35 },
 };
+// Symmetric, tight window for the pose selector, whose rough P7 is already within a
+// few frames of impact and has no systematic early/late bias to correct for.
+const POSE_IMPACT_REFINE_WINDOW = { before: 0.12, after: 0.12 };
 const IMPACT_REFINE_MODEL = "claude-sonnet-4-6";
 // Reject a refined P7 that lands implausibly close to P4 (would collapse the
 // downswing frames) — a real downswing is at least this long.
@@ -358,9 +361,14 @@ async function refineImpact(
   duration: number,
   apiKey: string,
   cameraAngle?: CameraAngle,
-  club?: Club
+  club?: Club,
+  windowOverride?: { before: number; after: number }
 ): Promise<number | null> {
-  const win = IMPACT_REFINE_WINDOW[cameraAngle ?? "dtl"];
+  // The per-angle windows are biased to correct the HEURISTIC motion-peak's known
+  // direction of error. Callers whose rough P7 has no such bias (e.g. the pose
+  // selector, which is already within a few frames of impact) pass a symmetric
+  // override so the model snaps to the exact strike instead of drifting.
+  const win = windowOverride ?? IMPACT_REFINE_WINDOW[cameraAngle ?? "dtl"];
   const startSec = Math.max(0, roughP7Sec - win.before);
   const endSec = Math.min(duration, roughP7Sec + win.after);
   const count = Math.max(1, Math.round((endSec - startSec) * SCAN_FPS) + 1);
@@ -465,8 +473,41 @@ export async function extractFrames(videoPath: string, outputDir: string, opts?:
     throw new Error(`Video too long: ${duration.toFixed(1)}s. Max ${MAX_DURATION_SEC}s — please trim and try again.`);
   }
 
-  const frameIndices = await selectSwingFramesSmart(videoPath, duration, opts);
-  const frameSeconds = frameIndices.map((i) => i / SCAN_FPS);
+  // Frame selection: pose-based (experimental, flag-gated) or the motion heuristic.
+  // USE_POSE_SELECTION=1 in .env.local switches to pose for local testing; default
+  // stays on the shipped heuristic so production is unaffected. Dynamic import keeps
+  // the tfjs stack out of the runtime entirely unless the flag is on.
+  let frameSeconds: number[];
+  if (process.env.USE_POSE_SELECTION === "1") {
+    const { selectSwingFramesPose } = await import("./pose-select");
+    const pose = await selectSwingFramesPose(videoPath, duration, opts?.onProgress);
+    // Hybrid: pose gives robust swing STRUCTURE (P1/P4/P10 + spacing) that generalizes
+    // across swing types, but it can't see the clubhead, so its P7 is ~1-3 frames off.
+    // Lock impact visually with the same model refine the heuristic uses, then re-space
+    // the downswing/follow-through around it. No "later-only" guard here: that guard
+    // exists to protect the heuristic's good motion-peak math, but pose impact has no
+    // systematic early bias, so we trust the visual pick within plausible bounds.
+    let indices = pose.seconds.map((s) => Math.round(s * SCAN_FPS));
+    // Refine P7 only where pose's wrist-based impact has a known bias the model can
+    // correct: on DTL (and unknown angle) the clubhead reaches the ball a few frames
+    // AFTER the wrists return to address height, so pose reads early and the visual
+    // refine pulls it onto the strike. On FACE-ON the wrist height coincides with
+    // impact (pose is already at the ball), and the model drifts late on ball-littered
+    // range mats — so we trust pose and skip the model call entirely (also faster).
+    const refineP7 = opts?.cameraAngle !== "face-on";
+    if (opts?.apiKey && refineP7) {
+      const refined = await refineImpact(videoPath, indices[6] / SCAN_FPS, duration, opts.apiKey, opts.cameraAngle, opts.club, POSE_IMPACT_REFINE_WINDOW);
+      const minP7 = indices[3] + Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
+      const maxP7 = indices[9] - Math.round(MIN_DOWNSWING_SEC * SCAN_FPS);
+      if (refined != null && refined >= minP7 && refined <= maxP7) {
+        indices = reanchorAroundP7(indices, refined);
+      }
+    }
+    frameSeconds = indices.map((i) => i / SCAN_FPS);
+  } else {
+    const frameIndices = await selectSwingFramesSmart(videoPath, duration, opts);
+    frameSeconds = frameIndices.map((i) => i / SCAN_FPS);
+  }
 
   const frames: string[] = [];
   for (let i = 0; i < frameSeconds.length; i++) {
