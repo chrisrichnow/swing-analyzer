@@ -15,3 +15,12 @@ Auto-updated by git post-commit hook. Each entry = one commit.
 
 ## 2026-06-14 — Add PROGRESSION.md auto-log and fix local Supabase crash
 `62d2c74`
+
+## 2026-06-14 — Fix swing-position selection accuracy and speed up analysis
+`8123575` — Killed the AI-mapping fallback (it was worse than math on every DTL clip), merged drills into the analysis call, downscaled scene detection, and added per-phase timing logs. Faster pipeline, more accurate frame picks.
+
+## 2026-06-14 — Make impact (P7) and takeaway selection robust to real-world swings
+`2536aff` — Always lock P7 visually with a "later-only" guard (fixes the false early motion-peak on DTL club-sweeps and the face-on early bias while keeping good math picks). Anchor takeaway detection on P4 and measure the backswing peak in the ~1.2s before it, skipping a long pre-shot routine/waggle that previously smeared P2/P3 onto the address frame.
+
+## 2026-06-14 — Add pose-estimation frame selection (experimental, flag-gated)
+`6d1258c` — Biomechanics-based selector tracking the wrists via MoveNet, immune to background motion. Gated behind USE_POSE_SELECTION=1 (default off). Hybrid impact: DTL refines P7 visually, face-on trusts pose. Backend auto-selects native tfjs-node (~10x) with WASM fallback. DTL validation nails all anchors on the historically-broken clip.
