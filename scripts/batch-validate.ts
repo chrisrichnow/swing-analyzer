@@ -20,13 +20,13 @@ const labels = ["P1", "P2", "P3", "P4", "P5", "P6", "P7", "P8", "P9", "P10"];
 type Clip = { file: string; angle: ExtractOpts["cameraAngle"]; club: ExtractOpts["club"] };
 
 const CLIPS: Clip[] = [
-  { file: "IMG_6732.mov",     angle: "dtl",     club: "iron" },
-  { file: "dtl_iron_2.mov",   angle: "dtl",     club: "iron" },
-  { file: "dtl_iron_3.mp4",   angle: "dtl",     club: "iron" },
-  { file: "dtl_iron_mid.mov", angle: "dtl",     club: "iron" },
+  { file: "IMG_6732.mov",     angle: "dtl",     club: "mid-iron" },
+  { file: "dtl_iron_2.mov",   angle: "dtl",     club: "mid-iron" },
+  { file: "dtl_iron_3.mp4",   angle: "dtl",     club: "mid-iron" },
+  { file: "dtl_iron_mid.mov", angle: "dtl",     club: "mid-iron" },
   { file: "dtl_driver.mov",   angle: "dtl",     club: "driver" },
   { file: "dtl_driver_2.mov", angle: "dtl",     club: "driver" },
-  { file: "faceon_iron.mov",  angle: "face-on", club: "iron" },
+  { file: "faceon_iron.mov",  angle: "face-on", club: "mid-iron" },
 ];
 
 async function main() {

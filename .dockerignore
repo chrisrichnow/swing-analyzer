@@ -12,3 +12,4 @@ test-videos/
 next-env.d.ts
 tmp_frames/
 *.log
+scripts/
