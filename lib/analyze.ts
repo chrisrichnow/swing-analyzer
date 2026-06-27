@@ -626,8 +626,8 @@ P9 — TRAIL ARM PARALLEL (follow-through): Trail arm parallel to the ground in 
 
 P10 — FINISH: Full finish. Lead shoulder well behind original ball position. Belt buckle/hips pushed toward target. Weight on outside edge of lead foot, trail foot balanced on toe. Trail ear lower than lead ear. Lead elbow below lead shoulder. Thighs sealed together.
 
-SCORING — give each position a score from 0 to 100 based on how closely it matches tour-quality technique for this club and camera angle. Score each position INDEPENDENTLY on its own merits; do not anchor them all to a similar number. Use the FULL range and be discriminating — a 77 and an 82 are meaningfully different, so avoid lazy round numbers and avoid clustering everything in a narrow band. Most amateur positions land 55-85; reserve 90+ for genuinely tour-caliber positions and use the 40s-50s for clear faults.
-Bands: 90-100 = tour-caliber, no fault | 80-89 = solid, minor refinement | 70-79 = functional but a clear flaw | 60-69 = a fault costing distance or accuracy | below 60 = a major fault.
+SCORING — give each position a score from 0 to 100. This is AMATEUR swing coaching, and the scale is DEDUCTION-BASED: start every position at 93 (a sound, repeatable amateur position) and subtract only for what you actually see wrong. A position with no real fault stays in the low 90s; a minor refinement is NOT a fault — at most a point or two. Subtract more only for a real, visible flaw (down to the low-to-mid 80s), a fault costing distance or accuracy (70s), or a major fault (below 65). The benchmark is a sound amateur swing, NOT a tour pro — do not deduct for failing to look like a touring professional. Score each position INDEPENDENTLY, and use fine-grained numbers (a 92 and a 95 are different) rather than clustering on identical values.
+Bands: 90-100 = excellent, no real fault | 85-89 = solid, minor refinement only | 75-84 = a noticeable flaw | 65-74 = a real fault costing distance or accuracy | below 65 = a major fault.
 
 IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
 
