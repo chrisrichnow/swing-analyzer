@@ -24,3 +24,24 @@ Auto-updated by git post-commit hook. Each entry = one commit.
 
 ## 2026-06-14 — Add pose-estimation frame selection (experimental, flag-gated)
 `6d1258c` — Biomechanics-based selector tracking the wrists via MoveNet, immune to background motion. Gated behind USE_POSE_SELECTION=1 (default off). Hybrid impact: DTL refines P7 visually, face-on trusts pose. Backend auto-selects native tfjs-node (~10x) with WASM fallback. DTL validation nails all anchors on the historically-broken clip.
+
+## 2026-06-14 — Add batch pose-selection validator across clip manifest
+`19e52a3`
+
+## 2026-06-26 — v2 frame selection: SwingNet inference service + auto-crop
+`80e1894`
+
+## 2026-06-26 — Weighted, deterministic overall score derived from per-position scores
+`2cdc926`
+
+## 2026-06-26 — Calibrate scoring rubric for honest amateur grading
+`f9fefa6`
+
+## 2026-06-26 — Exclude ml/ and test-videos from frontend Docker build context
+`d2ef70b`
+
+## 2026-06-26 — Fix batch-validate Club type + exclude dev scripts from prod build
+`f425da9`
+
+## 2026-06-26 — Downscale frames on read + bump ML service to 4GB (fix OOM)
+`a4302b9`

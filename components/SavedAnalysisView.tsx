@@ -5,6 +5,7 @@ import { Analysis, Drill, Grade } from "@/types";
 import GradeBadge from "@/components/Gradebadge";
 import PositionCard from "@/components/PositionCard";
 import DrillCard from "@/components/DrillCard";
+import FrameLightbox from "@/components/FrameLightbox";
 
 const GRADE_ORDER: Record<Grade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
 
@@ -43,7 +44,7 @@ interface Props {
 
 export default function SavedAnalysisView({ analysis, drills, frames }: Props) {
   const [tab, setTab] = useState<"positions" | "drills">("positions");
-  const [expandedFrame, setExpandedFrame] = useState<string | null>(null);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   const positions = Object.entries(analysis.positions);
   const avgGrade =
@@ -98,7 +99,7 @@ export default function SavedAnalysisView({ analysis, drills, frames }: Props) {
                 <button
                   key={i}
                   className="relative shrink-0 lg:shrink lg:w-full"
-                  onClick={() => setExpandedFrame(src)}
+                  onClick={() => setExpandedIndex(i)}
                 >
                   <img
                     src={src}
@@ -123,18 +124,12 @@ export default function SavedAnalysisView({ analysis, drills, frames }: Props) {
       )}
 
       {/* Frame lightbox */}
-      {expandedFrame && (
-        <div
-          className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-          onClick={() => setExpandedFrame(null)}
-        >
-          <img
-            src={expandedFrame}
-            alt="Frame"
-            className="max-w-full max-h-full rounded-xl object-contain"
-          />
-        </div>
-      )}
+      <FrameLightbox
+        frames={frames}
+        index={expandedIndex}
+        onClose={() => setExpandedIndex(null)}
+        onIndexChange={setExpandedIndex}
+      />
 
       {/* Tabs */}
       <div className="sticky top-0 z-20 -mx-5 px-5 pt-2 pb-3 bg-[#080808]/95 backdrop-blur-sm">

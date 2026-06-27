@@ -6,6 +6,7 @@ import { SwingResult, Grade } from "@/types";
 import GradeBadge from "@/components/Gradebadge";
 import PositionCard from "@/components/PositionCard";
 import DrillCard from "@/components/DrillCard";
+import FrameLightbox from "@/components/FrameLightbox";
 import Link from "next/link";
 
 const GRADE_ORDER: Record<Grade, number> = { A: 4, B: 3, C: 2, D: 1, F: 0 };
@@ -40,7 +41,7 @@ export default function ResultsPage() {
   const router = useRouter();
   const [result, setResult] = useState<SwingResult | null>(null);
   const [tab, setTab] = useState<"positions" | "drills">("positions");
-  const [expandedFrame, setExpandedFrame] = useState<string | null>(null);
+  const [expandedIndex, setExpandedIndex] = useState<number | null>(null);
 
   useEffect(() => {
     const raw = sessionStorage.getItem("swingResult");
@@ -133,7 +134,7 @@ export default function ResultsPage() {
             <p className="text-xs text-white/30 uppercase tracking-widest mb-3">Your Swing — {frames.length} Frames</p>
             <div className="flex lg:grid lg:grid-cols-10 gap-2 overflow-x-auto lg:overflow-visible pb-2 scrollbar-hide">
               {frames.map((src, i) => (
-                <button key={i} className="relative shrink-0 lg:shrink lg:w-full" onClick={() => setExpandedFrame(src)}>
+                <button key={i} className="relative shrink-0 lg:shrink lg:w-full" onClick={() => setExpandedIndex(i)}>
                   <img
                     src={src}
                     alt={`Frame ${i + 1}`}
@@ -147,13 +148,13 @@ export default function ResultsPage() {
         )}
 
         {/* Frame lightbox */}
-        {expandedFrame && (
-          <div
-            className="fixed inset-0 z-50 bg-black/90 flex items-center justify-center p-4"
-            onClick={() => setExpandedFrame(null)}
-          >
-            <img src={expandedFrame} alt="Frame" className="max-w-full max-h-full rounded-xl object-contain" />
-          </div>
+        {frames && (
+          <FrameLightbox
+            frames={frames}
+            index={expandedIndex}
+            onClose={() => setExpandedIndex(null)}
+            onIndexChange={setExpandedIndex}
+          />
         )}
 
         {/* Tabs */}
