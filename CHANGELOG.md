@@ -2,7 +2,17 @@
 
 _Auto-updated on every push to master. Newest first._
 
+## 2026-06-26
+- Recalibrate grading to 80-centered scale + add frame navigation
+- Downscale frames on read + bump ML service to 4GB (fix OOM)
+- Fix batch-validate Club type + exclude dev scripts from prod build
+- Exclude ml/ and test-videos from frontend Docker build context
+- Calibrate scoring rubric for honest amateur grading
+- Weighted, deterministic overall score derived from per-position scores
+- v2 frame selection: SwingNet inference service + auto-crop
+
 ## 2026-06-14
+- Add batch pose-selection validator across clip manifest
 - Backfill PROGRESSION log for recent commits
 - Add pose-estimation frame selection (experimental, flag-gated)
 - Make impact (P7) and takeaway selection robust to real-world swings
