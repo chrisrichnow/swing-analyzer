@@ -1,0 +1,13 @@
+.venv/
+__pycache__/
+*.pyc
+swingnet-out/
+pipeline-out/
+*.json
+*.mp4
+*.mov
+test_video.py
+train.py
+infer_cpu.py
+data/
+.git/

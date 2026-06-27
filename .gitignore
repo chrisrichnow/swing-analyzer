@@ -11,3 +11,15 @@ tmp_frames/
 .playwright-cli/
 test-videos/
 test-results/
+
+# ml inference service — exclude venv, model weights (fetched at setup), test outputs
+ml/.venv/
+ml/**/__pycache__/
+ml/golfdb/models/
+ml/golfdb/yolov8n.pt
+ml/golfdb/swingnet-out/
+ml/golfdb/pipeline-out/
+ml/golfdb/data/
+ml/golfdb/test_video.mp4
+ml/*.json
+ml/*.txt

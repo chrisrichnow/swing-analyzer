@@ -1,0 +1,19 @@
+app = 'swing-analyzer-ml'
+primary_region = 'dfw'
+
+[build]
+
+[http_service]
+  internal_port = 8000
+  force_https = true
+  # Scale to zero when idle so the box only costs money during analysis.
+  # First request after idle cold-starts (torch load ~10-30s) — fine for low volume.
+  auto_stop_machines = 'stop'
+  auto_start_machines = true
+  min_machines_running = 0
+
+[[vm]]
+  # 2GB so torch + ultralytics + a decoded clip fit comfortably (1GB is too tight).
+  memory = '2gb'
+  cpu_kind = 'shared'
+  cpus = 2

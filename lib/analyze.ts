@@ -1,6 +1,6 @@
 import Anthropic from "@anthropic-ai/sdk";
 import { execSync } from "child_process";
-import { readFileSync, mkdirSync, rmSync, existsSync } from "fs";
+import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
 import { Analysis, Drill, CameraAngle, Club } from "@/types";
 
@@ -464,9 +464,45 @@ export async function selectSwingFramesSmart(
   return indices;
 }
 
+// v2 frame selection: delegate to the Python SwingNet inference service (trained
+// golf event-spotter + YOLO person auto-crop + monotonic-event DP). The service
+// returns the 10 selected frames as base64 JPEGs in P1..P10 order; we just write
+// them to disk so everything downstream (grading, UI, saving) is unchanged.
+// Enabled by setting SWING_SERVICE_URL; falls back to the legacy selector if unset.
+async function selectViaService(serviceUrl: string, videoPath: string, outputDir: string): Promise<string[]> {
+  const buf = readFileSync(videoPath);
+  const form = new FormData();
+  form.append("video", new Blob([new Uint8Array(buf)], { type: "video/mp4" }), "video.mp4");
+
+  const res = await fetch(`${serviceUrl.replace(/\/$/, "")}/select`, { method: "POST", body: form });
+  if (!res.ok) {
+    throw new Error(`Swing service error ${res.status}: ${(await res.text()).slice(0, 200)}`);
+  }
+  const data = (await res.json()) as { frames: (string | null)[] };
+  if (!Array.isArray(data.frames) || data.frames.length !== 10) {
+    throw new Error(`Swing service returned ${data.frames?.length ?? 0}/10 frames.`);
+  }
+
+  const paths: string[] = [];
+  data.frames.forEach((b64, i) => {
+    if (!b64) throw new Error(`Swing service missing frame ${i + 1}/10.`);
+    const framePath = join(outputDir, `frame_${String(i + 1).padStart(3, "0")}.jpg`);
+    writeFileSync(framePath, Buffer.from(b64, "base64"));
+    paths.push(framePath);
+  });
+  return paths;
+}
+
 export async function extractFrames(videoPath: string, outputDir: string, opts?: ExtractOpts): Promise<string[]> {
   if (existsSync(outputDir)) rmSync(outputDir, { recursive: true });
   mkdirSync(outputDir, { recursive: true });
+
+  // v2 path: trained SwingNet service handles selection (auto-crop + event model).
+  const serviceUrl = process.env.SWING_SERVICE_URL;
+  if (serviceUrl) {
+    opts?.onProgress?.("Detecting swing positions...");
+    return selectViaService(serviceUrl, videoPath, outputDir);
+  }
 
   const duration = probeDurationSec(videoPath);
   if (duration > MAX_DURATION_SEC) {
@@ -546,7 +582,7 @@ function buildAnalysisPrompt(cameraAngle: CameraAngle, club: Club, historyContex
     ? `\n## PLAYER HISTORY\n${historyContext}\n\nIf history is available, note whether patterns you observe in this swing are recurring (mention specific positions and whether you see improvement or regression). Reference this in the summary field only — do not change the P1-P10 grading criteria.\n`
     : "";
 
-  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have exactly 10 frames, evenly extracted across the full swing window — one per position. The mapping is fixed:
+  return `You are an expert PGA-level golf instructor analyzing a golf swing. You have exactly 10 frames, each precisely detected at its swing position by a trained golf event-detection model — one per position. The mapping is fixed:
 
 Frame 1 = P1 (Address)
 Frame 2 = P2 (Takeaway)
