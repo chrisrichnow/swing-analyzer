@@ -2,7 +2,7 @@ import Anthropic from "@anthropic-ai/sdk";
 import { execSync } from "child_process";
 import { readFileSync, writeFileSync, mkdirSync, rmSync, existsSync } from "fs";
 import { join } from "path";
-import { Analysis, Drill, CameraAngle, Club } from "@/types";
+import { Analysis, Drill, CameraAngle, Club, Grade } from "@/types";
 
 const ext = process.platform === "win32" ? ".exe" : "";
 const FFMPEG = join(process.cwd(), `node_modules/ffmpeg-static/ffmpeg${ext}`);
@@ -626,22 +626,24 @@ P9 — TRAIL ARM PARALLEL (follow-through): Trail arm parallel to the ground in 
 
 P10 — FINISH: Full finish. Lead shoulder well behind original ball position. Belt buckle/hips pushed toward target. Weight on outside edge of lead foot, trail foot balanced on toe. Trail ear lower than lead ear. Lead elbow below lead shoulder. Thighs sealed together.
 
+SCORING — give each position a score from 0 to 100 based on how closely it matches tour-quality technique for this club and camera angle. Score each position INDEPENDENTLY on its own merits; do not anchor them all to a similar number. Use the FULL range and be discriminating — a 77 and an 82 are meaningfully different, so avoid lazy round numbers and avoid clustering everything in a narrow band. Most amateur positions land 55-85; reserve 90+ for genuinely tour-caliber positions and use the 40s-50s for clear faults.
+Bands: 90-100 = tour-caliber, no fault | 80-89 = solid, minor refinement | 70-79 = functional but a clear flaw | 60-69 = a fault costing distance or accuracy | below 60 = a major fault.
+
 IMPORTANT: Respond with ONLY valid JSON. No markdown, no code fences, no explanation.
 
 {
-  "overall_score": <0-100>,
   "summary": "<2-3 sentence executive summary>",
   "positions": {
-    "P1": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P2": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P3": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P4": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P5": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P6": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P7": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P8": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P9": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
-    "P10": { "frame": <n>, "grade": "<A|B|C|D|F>", "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" }
+    "P1": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P2": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P3": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P4": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P5": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P6": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P7": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P8": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P9": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" },
+    "P10": { "frame": <n>, "score": <0-100>, "what_is_good": "<string>", "issue": "<string or null>", "fix": "<string>" }
   },
   "priority_fix": {
     "position": "<P#>",
@@ -692,6 +694,39 @@ function parseModelJson<T>(text: string, label: string): T {
 }
 
 const GRADE_ORDER: Record<string, number> = { F: 0, D: 1, C: 2, B: 3, A: 4 };
+
+// Per-position weights for the overall score (sum = 100). Impact is king; the
+// strike-defining positions (P4 top, P6 delivery, P7 impact, P10 finish/balance)
+// carry the most weight; takeaway and early follow-through carry the least.
+const POSITION_WEIGHTS: Record<string, number> = {
+  P1: 10, P2: 5, P3: 8, P4: 12, P5: 9, P6: 12, P7: 18, P8: 7, P9: 7, P10: 12,
+};
+
+function scoreToGrade(s: number): Grade {
+  if (s >= 90) return "A";
+  if (s >= 80) return "B";
+  if (s >= 70) return "C";
+  if (s >= 60) return "D";
+  return "F";
+}
+
+// Deterministic, weighted overall score from the per-position scores. Also
+// backfills each position's letter grade from its score so the number and the
+// letters can never disagree. Mutates and returns the analysis.
+function computeWeightedScore(analysis: Analysis): Analysis {
+  let weighted = 0;
+  let totalWeight = 0;
+  for (const [pos, data] of Object.entries(analysis.positions)) {
+    const s = Math.max(0, Math.min(100, Math.round(data.score ?? 0)));
+    data.score = s;
+    data.grade = scoreToGrade(s);
+    const w = POSITION_WEIGHTS[pos] ?? 0;
+    weighted += s * w;
+    totalWeight += w;
+  }
+  analysis.overall_score = totalWeight > 0 ? Math.round(weighted / totalWeight) : 0;
+  return analysis;
+}
 
 export function buildHistoryContext(
   pastAnalyses: Array<{
@@ -749,6 +784,7 @@ export async function analyzeSwing(
 
   const analysis = parseModelJson<Analysis>((response.content[0] as { text: string }).text, "swing analysis");
   if (!Array.isArray(analysis.drills)) analysis.drills = [];
+  computeWeightedScore(analysis); // deterministic weighted overall + derive letter grades from scores
   return analysis;
 }
 

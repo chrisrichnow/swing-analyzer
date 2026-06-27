@@ -2,6 +2,7 @@ export type Grade = "A" | "B" | "C" | "D" | "F";
 
 export interface PositionData {
   frame: number;
+  score: number;        // 0-100, model-assigned; grade is derived from it
   grade: Grade;
   what_is_good: string;
   issue: string | null;
