@@ -51,7 +51,12 @@ def _get_yolo(weights='yolov8n.pt'):
     return _yolo
 
 
-def read_frames(path):
+def read_frames(path, max_side=720):
+    """Decode frames, downscaling so the longest side <= max_side. SwingNet uses
+    160px and YOLO 640px, so full-res buys nothing but memory — keeping frames
+    small avoids OOM on large portrait phone clips. Frame indices (and the
+    returned bbox, used only on these same downscaled frames) stay consistent;
+    the service re-reads the original video by index for full-res output frames."""
     cap = cv2.VideoCapture(path)
     fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
     frames = []
@@ -59,6 +64,10 @@ def read_frames(path):
         ok, img = cap.read()
         if not ok:
             break
+        h, w = img.shape[:2]
+        s = max_side / max(h, w)
+        if s < 1:
+            img = cv2.resize(img, (int(w * s), int(h * s)))
         frames.append(img)
     cap.release()
     return frames, fps

@@ -13,7 +13,8 @@ primary_region = 'dfw'
   min_machines_running = 0
 
 [[vm]]
-  # 2GB so torch + ultralytics + a decoded clip fit comfortably (1GB is too tight).
-  memory = '2gb'
+  # 4GB headroom for torch + ultralytics + frame decoding (2GB OOM'd on large
+  # portrait clips before the read-frame downscale; this is belt-and-suspenders).
+  memory = '4gb'
   cpu_kind = 'shared'
   cpus = 2
